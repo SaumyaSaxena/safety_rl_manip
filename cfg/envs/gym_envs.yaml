@@ -1,0 +1,32 @@
+zermelo_show-v0:
+  mode: 'RA' # 'normal', 'extend', 'RA'
+  doneType: 'TF' # TF, fail
+  thickness: .1
+  sample_inside_obs: False
+  envType: 'show'
+
+dubins_car-v1:
+  mode: "RA"
+  doneType: "toEnd"
+  sample_inside_obs: False
+  sample_inside_tar: True
+
+pickup_1D_v0:
+  mode: 'RA'
+  doneType: 'toEnd'
+  sample_inside_obs: False
+  task: 'pick_object' # gripper_to_goal, reach_object, pick_object, object_to_goal, slow_pick
+  T: 10.0
+  dt: 0.05
+  gripper_mass: 1.
+  object_mass: 1.
+  thresh: 0.1
+  state_low: [-1., -1., -1., -1.] # x_g, xdot_g, x_o, xdot_o
+  state_high: [1., 1., 1., 1.]
+  control_low: [-1.]
+  control_high: [1.]
+  N_x: [61, 61, 61, 61]  # Number of grid points per state dimension
+  N_u: [61] # Number of grid points per control dimension
+  initial_state: [0.00, 0., 0.25, 0.]
+  goal: [0.5, 0]
+  adjacency_calc_mode: 'nearest_grid_pt' # min_dist, nearest_grid_pt

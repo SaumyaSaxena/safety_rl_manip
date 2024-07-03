@@ -22,6 +22,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import os
 import time
+import wandb
 
 from .model import Model
 from .DDQN import DDQN, Transition
@@ -37,8 +38,8 @@ class DDQNSingle(DDQN):
   """
 
   def __init__(
-      self, CONFIG, numAction, actionList, dimList, mode="RA",
-      terminalType="g", verbose=True
+    self, CONFIG, numAction, actionList, dimList, mode="RA",
+    terminalType="g", verbose=True, debug=False,
   ):
     """
     Initializes with a configuration object, environment information, neural
@@ -68,6 +69,8 @@ class DDQNSingle(DDQN):
     # == Build neural network for (D)DQN ==
     self.dimList = dimList
     self.actType = CONFIG.ACTIVATION
+    self.debug = debug
+
     self.build_network(dimList, self.actType, verbose)
     print(
         "DDQN: mode-{}; terminalType-{}".format(self.mode, self.terminalType)
@@ -84,9 +87,8 @@ class DDQNSingle(DDQN):
     self.Q_network = Model(dimList, actType, verbose=verbose)
     self.target_network = Model(dimList, actType)
 
-    if self.device == torch.device("cuda"):
-      self.Q_network.cuda()
-      self.target_network.cuda()
+    self.Q_network.to(self.device)
+    self.target_network.to(self.device)
 
     self.build_optimizer()
 
@@ -262,8 +264,13 @@ class DDQNSingle(DDQN):
       nn.utils.clip_grad_norm_(self.Q_network.parameters(), self.max_grad_norm)
       self.optimizer.step()
       lossList[ep_tmp] = loss.detach().cpu().numpy()
+
+      if not self.debug:
+        log_dict = {f'warmup_loss': lossList[ep_tmp]}
+        log_dict.update({'optim/lr': self.optimizer.param_groups[0]['lr']})
+        wandb.log(log_dict, step=ep_tmp)
       print(
-          "\rWarmup Q [{:d}]. MSE = {:f}".format(ep_tmp + 1, loss),
+          "\rWarmup Q [{:d} / {:d}]. MSE = {:f}".format(ep_tmp + 1, warmupIter, loss),
           end="",
       )
 
@@ -393,6 +400,9 @@ class DDQNSingle(DDQN):
         self.store_transition(s, a_idx, r, s_, info)
         s = s_
 
+        if not self.debug:
+          log_dict = {}
+
         # Check after fixed number of gradient updates
         if self.cntUpdate != 0 and self.cntUpdate % checkPeriod == 0:
           results = env.simulate_trajectories(
@@ -403,6 +413,12 @@ class DDQNSingle(DDQN):
           failure = np.sum(results == -1) / results.shape[0]
           unfinish = np.sum(results == 0) / results.shape[0]
           trainProgress.append([success, failure, unfinish])
+
+          if not self.debug:
+            log_dict.update({f'Success Rate': success})
+            log_dict.update({f'Failure Rate': failure})
+            log_dict.update({f'Unfinish Rate': unfinish})
+
           if verbose:
             lr = self.optimizer.state_dict()["param_groups"][0]["lr"]
             print("\nAfter [{:d}] updates:".format(self.cntUpdate))
@@ -416,12 +432,13 @@ class DDQNSingle(DDQN):
               print(np.array([success, failure, unfinish]))
 
           if storeModel:
+            save_file_name = os.path.join(modelFolder, f'ckpt_update_step_{self.cntUpdate}_success_{success:.3f}.pth')
             if storeBest:
               if success > checkPointSucc:
                 checkPointSucc = success
-                self.save(self.cntUpdate, modelFolder)
+                self.save(self.cntUpdate, modelFolder, success=success, debug=self.debug)
             else:
-              self.save(self.cntUpdate, modelFolder)
+              self.save(self.cntUpdate, modelFolder, success=success, debug=self.debug)
 
           if plotFigure or storeFigure:
             # self.Q_network.eval()
@@ -447,6 +464,13 @@ class DDQNSingle(DDQN):
         # Perform one step of the optimization (on the target network)
         lossC = self.update(addBias=addBias)
         trainingRecords.append(lossC)
+
+        if not self.debug:
+          # this logging happens per update step
+          log_dict.update({f'critic_loss': lossC})
+          log_dict.update({'optim/lr': self.optimizer.param_groups[0]['lr']})
+          wandb.log(log_dict, step=self.cntUpdate)
+        
         self.cntUpdate += 1
         self.updateHyperParam()
 
@@ -456,6 +480,15 @@ class DDQNSingle(DDQN):
 
       # Rollout report
       runningCost = runningCost*0.9 + epCost*0.1
+      
+      if not self.debug:
+        # this logging happens per episode
+        log_dict = {f'Running cost': runningCost}
+        log_dict.update({'epCost': epCost})
+        log_dict.update({'Episode steps':  step_num+1})
+        log_dict.update({'Episode num': ep})
+        wandb.log(log_dict, step=self.cntUpdate)
+      
       if verbose:
         print(
             "\r[{:d}-{:d}]: ".format(ep, self.cntUpdate)
@@ -478,7 +511,7 @@ class DDQNSingle(DDQN):
     timeInitBuffer = endInitBuffer - startInitBuffer
     timeInitQ = endInitQ - startInitQ
     timeLearning = endLearning - startLearning
-    self.save(self.cntUpdate, modelFolder)
+    self.save(self.cntUpdate, modelFolder, success=success, debug=self.debug)
     print(
         "\nInitBuffer: {:.1f}, InitQ: {:.1f}, Learning: {:.1f}".format(
             timeInitBuffer, timeInitQ, timeLearning

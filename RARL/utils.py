@@ -10,7 +10,7 @@ import os
 import glob
 import pickle
 import torch
-
+import wandb
 
 def soft_update(target, source, tau):
   """Uses soft_update method to update the target network.
@@ -24,7 +24,7 @@ def soft_update(target, source, tau):
     target_param.data.copy_(target_param.data * (1.0-tau) + param.data * tau)
 
 
-def save_model(model, step, logs_path, types, MAX_MODEL):
+def save_model(model, step, logs_path, types, MAX_MODEL, success=0., config=None, debug=False):
   """Saves the weights of the model.
 
   Args:
@@ -40,9 +40,23 @@ def save_model(model, step, logs_path, types, MAX_MODEL):
   if len(model_list) > MAX_MODEL - 1:
     min_step = min([int(li.split("/")[-1][start:-4]) for li in model_list])
     os.remove(os.path.join(logs_path, "{}-{}.pth".format(types, min_step)))
-  logs_path = os.path.join(logs_path, "{}-{}.pth".format(types, step))
-  torch.save(model.state_dict(), logs_path)
-  print("  => Save {} after [{}] updates".format(logs_path, step))
+  save_file_name = os.path.join(logs_path, f"{types}_step_{step}_success_{success:.2f}.pth")
+  
+  if config is not None:
+    torch.save(
+      obj={
+          "state_dict": model.state_dict(),
+          "config": config,
+          "step": step,
+      },
+      f=save_file_name,
+  )
+  else:
+    torch.save(model.state_dict(), save_file_name)
+
+  if not debug:
+    wandb.save(save_file_name, base_path=os.path.join(logs_path, '..'))
+  print("  => Save {} after [{}] updates".format(save_file_name, step))
 
 
 def save_obj(obj, filename):

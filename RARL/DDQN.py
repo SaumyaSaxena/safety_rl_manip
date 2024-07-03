@@ -183,14 +183,14 @@ class DDQN(abc.ABC):
     """
     self.memory.update(Transition(*args))
 
-  def save(self, step, logs_path):
+  def save(self, step, logs_path, success=0., debug=False):
     """Saves the model weights and save the configuration file in first call.
 
     Args:
         step (int): the number of updates so far.
         logs_path (str): the folder path to save the model.
     """
-    save_model(self.Q_network, step, logs_path, "Q", self.MAX_MODEL)
+    save_model(self.Q_network, step, logs_path, "Q", self.MAX_MODEL, success=success, config=self.CONFIG, debug=debug)
     if not self.saved:
       config_path = os.path.join(logs_path, "CONFIG.pkl")
       pickle.dump(self.CONFIG, open(config_path, "wb"))

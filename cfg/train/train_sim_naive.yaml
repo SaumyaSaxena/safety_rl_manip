@@ -1,0 +1,65 @@
+debug: True
+gpu: 0
+seed: 0
+tag: ${now:%Y-%m-%d-%H-%M-%S}
+run_name: "train_DDQN_RL_${mode}" 
+
+hydra:
+  run:
+    dir: outputs/${run_name}/${tag}
+
+defaults:
+  - /envs: gym_envs.yaml
+
+wandb:
+  entity: iam-lab
+  group: drabe
+  project: safety_rl_manip
+  name: drabe_point_mass
+  saver:
+    upload: True
+    save_top_k: 5
+    save_freq: 10
+wandb_resume_id: null
+
+env_name: "zermelo_show-v0"
+envs:
+  zermelo_show-v0:
+    doneType: 'toEnd'
+    envType: 'basic'
+
+# environment parameters
+costType: sparse #
+reward: -1 # when entering target set
+penalty: 1 # when entering failure set
+scaling: 4 # scaling of ell/g
+
+# training scheme
+batch_size: 64
+warmup: True # warmup Q-network
+warmupIter: 2000 # warmup iteration
+num_warmup_samples: 200
+maxUpdates: 400000 # maximal #gradient updates
+maxSteps: 250
+updateTimes: 10 # hyper-param steps
+memoryCapacity: 10000
+checkPeriod: 20000
+numRndTraj: 10000
+
+# NN hyper-parameters
+annealing: True # gamma annealing
+architecture: [100, 20]
+learningRate: 1e-3
+gamma: 0.9999 # contraction coeff
+actType: Tanh
+
+# RL
+mode: 'RA' # RA, lagrange
+terminalType: 'g' # terminal value
+
+# file
+showTime: True # show timestr
+name: '' # extra name
+outFolder: 'experiments' # output file
+plotFigure: True
+storeFigure: True

@@ -1,8 +1,5 @@
 """
-Please contact the author(s) of this library if you have any questions.
-Authors: Kai-Chieh Hsu ( kaichieh@princeton.edu )
-
-This module implements an environment considering the 2D point object dynamics.
+This module implements an environment considering the 1D point object dynamics.
 This environemnt shows comparison between reach-avoid Q-learning and Sum
 (Lagrange) Q-learning.
 envType:
@@ -17,83 +14,38 @@ import matplotlib.pyplot as plt
 import torch
 import random
 import os
-from .env_utils import calculate_margin_rect
 
 
-class ZermeloShowEnv(gym.Env):
+class Pickup1DEnv(gym.Env):
 
-  def __init__(
-      self, device, mode='RA', doneType='toEnd', thickness=.1,
-      sample_inside_obs=False, envType='show'
-  ):
-    """Initializes the environment with given arguments.
+  def __init__(self, device, cfg):
 
-    Args:
-        device (str): device type (used in PyTorch).
-        mode (str, optional): reinforcement learning type. Defaults to 'RA'.
-        doneType (str, optional): conditions to raise `done flag in
-            training. Defaults to 'toEnd'.
-        thickness (float, optional): the thickness of the obstaclrs.
-            Defaults to 0.1.
-        sample_inside_obs (bool, optional): consider sampling the state inside
-            the obstacles if True. Defaults to False.
-        envType (str, optional): environment type. Defaults to 'show'.
-    """
-    self.envType = envType
+    self.env_cfg = cfg
 
-    # State Bounds.
-    if envType == 'basic' or envType == 'easy':
-      self.bounds = np.array([[-2, 2], [-2, 10]])
-    else:
-      self.bounds = np.array([[-3., 3.], [0., 6.]])
+    self.n = 4
+    self.m = 1
+    self.N_O = 2
+    
+    self.thresh = cfg.thresh
+    self.task = cfg.task
+    self.goal = cfg.goal
+
+    self.N_x = cfg.N_x  # Number of grid points per dimension
+    self.bounds = np.array([cfg.state_ranges.low, cfg.state_ranges.high]).T
+
     self.low = self.bounds[:, 0]
     self.high = self.bounds[:, 1]
-    self.sample_inside_obs = sample_inside_obs
+    self.sample_inside_obs = cfg.sample_inside_obs
+
+    X = [np.linspace(self.low[i], self.high[i], self.N_x[i]) for i in range(4)]
+    self.grid_x = np.stack(np.meshgrid(*X, indexing='ij'), axis=-1)
+    self.grid_x_flat = torch.from_numpy(self.grid_x.reshape(-1, self.grid_x.shape[-1])).float().to(self.device)
 
     # Time-step Parameters.
-    self.time_step = 0.05
-
-    # Control Parameters.
-    if envType == 'basic' or envType == 'easy':
-      self.upward_speed = 2.
-    else:
-      self.upward_speed = .5
-    self.horizontal_rate = 1.
-    self.discrete_controls = np.array([[
-        -self.horizontal_rate, self.upward_speed
-    ], [0, self.upward_speed], [self.horizontal_rate, self.upward_speed]])
-
-    # Constraint Set Parameters.
-    # [X-position, Y-position, width, height]
-    if envType == 'basic':
-      self.constraint_x_y_w_h = np.array([
-          [1.25, 2, 1.5, 1.5],
-          [-1.25, 2, 1.5, 1.5],
-          [0, 6, 1.5, 1.5],
-      ])
-      self.constraint_type = ['R', 'L', 'C']
-    elif envType == 'easy':
-      self.constraint_x_y_w_h = np.array([
-          [1.25, 2, 1.5, 1.5],
-          [-1.25, 2, 1.5, 1.5],
-          [0, 6, 3., thickness],
-      ])
-      self.constraint_type = ['R', 'L', 'C']
-    else:
-      self.constraint_x_y_w_h = np.array([
-          [0., 1.5, 4., thickness],
-          [0., 4., 4., thickness],
-      ])
-      self.constraint_type = ['C', 'C']
-
-    # Target Set Parameters.
-    if envType == 'basic' or envType == 'easy':
-      self.target_x_y_w_h = np.array([[0., 9.25, 1.5, 1.5]])
-    else:
-      self.target_x_y_w_h = np.array([[0., 5.5, 1., 1.]])
+    self.time_step = cfg.dt
 
     # Gym variables.
-    self.action_space = gym.spaces.Discrete(3)  # {left, up, right}
+    self.action_space = gym.spaces.Box(np.array(cfg.control_low), np.array(cfg.control_high))
     self.midpoint = (self.low + self.high) / 2.0
     self.interval = self.high - self.low
     self.observation_space = gym.spaces.Box(
@@ -112,38 +64,16 @@ class ZermeloShowEnv(gym.Env):
     self.costType = 'sparse'
     self.scaling = 1.
 
-    # mode: normal or extend (keep track of ell & g)
-    self.mode = mode
-    if mode == 'extend':
-      self.state = np.zeros(3)
-    else:
-      self.state = np.zeros(2)
-    self.doneType = doneType
+    self.state = np.zeros(self.n)
+    self.doneType = cfg.doneType
 
     # Visualization Parameters
-    self.constraint_set_boundary = self.get_constraint_set_boundary()
-    self.target_set_boundary = self.get_target_set_boundary()
-    if envType == 'basic' or envType == 'easy':
-      self.visual_initial_states = [
-          np.array([0, 0]),
-          np.array([-1, -2]),
-          np.array([1, -2]),
-          np.array([-1, 4]),
-          np.array([1, 4]),
-      ]
-    else:
-      self.visual_initial_states = [
-          np.array([0., 0.]),
-          np.array([-1., 0.]),
-          np.array([1., 0.]),
-          np.array([-2.5, 0.]),
-          np.array([2.5, 0.]),
-          np.array([-1., 2.5]),
-          np.array([1., 2.5])
-      ]
-    if mode == 'extend':
-      self.visual_initial_states = \
-          self.extend_state(self.visual_initial_states)
+    self.visual_initial_states = [
+      np.array([-0.5, 0., 0., 0.]),
+      np.array([0.5, 0., 0., 0.]),
+    ]
+
+    
 
     print(
         "Env: mode-{:s}; doneType-{:s}; sample_inside_obs-{}".format(
@@ -151,24 +81,27 @@ class ZermeloShowEnv(gym.Env):
         )
     )
 
+    # Define dynamics parameters
+    Apart = np.array(([1., cfg.dt],
+                      [0., 1.]))
+    self._A = np.zeros((4,4))
+    self._A[:2, :2] = Apart
+    self._A[2:4, 2:4] = Apart
+        
+    self._B1 = np.array(([0.],
+      [cfg.dt/cfg.gripper_mass],
+      [0.], 
+      [0.]))
+    self._B2 = np.array(([0.],
+      [cfg.dt/(cfg.gripper_mass+cfg.object_mass)],
+      [0.],
+      [cfg.dt/(cfg.gripper_mass+cfg.object_mass)]))
+    self._C = np.array(([1., 0., 0., 0.],
+      [0., cfg.gripper_mass/(cfg.gripper_mass+cfg.object_mass), 0., cfg.object_mass/(cfg.gripper_mass+cfg.object_mass)], 
+      [0., 0., 1., 0.], 
+      [0., cfg.gripper_mass/(cfg.gripper_mass+cfg.object_mass), 0., cfg.object_mass/(cfg.gripper_mass+cfg.object_mass)]))
     # for torch
     self.device = device
-
-  def extend_state(self, states):
-    """Extends the state to consist of max{ell, g}. Only used for mode='extend'.
-
-    Args:
-        states (np.ndarray): (x, y) position of states.
-
-    Returns:
-        np.ndarray: extended states.
-    """
-    new_states = []
-    for state in states:
-      l_x = self.target_margin(state)
-      g_x = self.safety_margin(state)
-      new_states.append(np.append(state, max(l_x, g_x)))
-    return new_states
 
   def reset(self, start=None):
     """Resets the state of the environment.
@@ -180,12 +113,16 @@ class ZermeloShowEnv(gym.Env):
     Returns:
         np.ndarray: The state the environment has been reset to.
     """
+    self._current_timestep = 0
     if start is None:
       self.state = self.sample_random_state(
           sample_inside_obs=self.sample_inside_obs
       )
     else:
       self.state = start
+
+    self._modetm1 = 0
+    self._modet = self._find_mode(self.state[0], self.state[2])
     return np.copy(self.state)
 
   def sample_random_state(self, sample_inside_obs=False):
@@ -198,33 +135,42 @@ class ZermeloShowEnv(gym.Env):
     Returns:
         np.ndarray: sampled initial state.
     """
-    inside_obs = True
+    inside_obs_or_colliding = True
     # Repeat sampling until outside obstacle if needed.
-    while inside_obs:
+    while inside_obs_or_colliding:
       xy_sample = np.random.uniform(low=self.low, high=self.high)
       g_x = self.safety_margin(xy_sample)
-      inside_obs = (g_x > 0)
-      if sample_inside_obs:
+      colliding = self._is_in_collision(xy_sample)
+      inside_obs_or_colliding = (g_x > 0) or colliding
+      if sample_inside_obs and not colliding: # should not be colliding but can be inside obstacle
         break
 
     return xy_sample
 
+  def _is_in_collision(self, state):
+    dist = np.linalg.norm(state[0] - state[2])
+    return dist < self.thresh
+
+  def _find_mode(self, gripper_pos, block_pos):
+    if np.linalg.norm(gripper_pos - block_pos) < self.thresh:
+      return 1
+    else:
+      return 0
+  
   # == Dynamics ==
   def step(self, action):
     """Evolves the environment one step forward under given action.
-
     Args:
-        action (int): the index of the action in the action set.
-
+        action (float)
     Returns:
         np.ndarray: next state.
         float: the standard cost used in reinforcement learning.
         bool: True if the episode is terminated.
         dict: consist of target margin and safety margin at the new state.
     """
-
-    u = self.discrete_controls[action]
-    state, [l_x, g_x] = self.integrate_forward(self.state, u)
+    self._current_timestep += 1
+    ut = np.array(action[0])
+    state, [l_x, g_x] = self.integrate_forward(self.state, ut)
     self.state = state
 
     fail = g_x > 0
@@ -272,39 +218,40 @@ class ZermeloShowEnv(gym.Env):
       info = {"g_x": g_x, "l_x": l_x}
     return np.copy(self.state), cost, done, info
 
-  def integrate_forward(self, state, u):
+  def integrate_forward(self, state, ut):
     """Integrates the dynamics forward by one step.
-
-    Args:
-        state (np.ndarray): x, y - position
-                            [z]  - optional, extra state dimension
-                                capturing reach-avoid outcome so far)
-        u (np.ndarray): contol inputs, consisting of v_x and v_y
 
     Returns:
         np.ndarray: next state.
     """
-    if self.mode == 'extend':
-      x, y, z = state
+    xt = state.reshape(4,1)
+    if self._modet == self._modetm1:
+      self.At = self._A.copy()
+      if self._modet == 0:
+          xtp1 = self._A@xt + self._B1@ut
+          self.Bt = self._B1.copy()
+      else:
+          xtp1 = self._A@xt + self._B2@ut
+          self.Bt = self._B2.copy()
     else:
-      x, y = state
+      self.At = self._A@self._C
+      if self._modet == 0:
+          xtp1 = self._A@self._C@xt + self._B1@ut
+          self.Bt = self._B1.copy()
+      else:
+          xtp1 = self._A@self._C@xt + self._B2@ut
+          self.Bt = self._B2.copy()
 
-    # one step forward
-    x = x + self.time_step * u[0]
-    y = y + self.time_step * u[1]
+    xtp1 = xtp1.flatten()
+    modetp1 = self._find_mode(xtp1[0], xtp1[2])
+    self._modetm1 = self._modet + 0
+    self._modet = modetp1 + 0
 
-    l_x = self.target_margin(np.array([x, y]))
-    g_x = self.safety_margin(np.array([x, y]))
-
-    if self.mode == 'extend':
-      z = min(z, max(l_x, g_x))
-      state = np.array([x, y, z])
-    else:
-      state = np.array([x, y])
+    l_x = self.target_margin(xtp1.reshape(1,4))
+    g_x = self.safety_margin(xtp1.reshape(1,4))
 
     info = np.array([l_x, g_x])
-
-    return state, info
+    return xtp1, info
 
   # == Setting Hyper-Parameters ==
   def set_costParam(
@@ -387,48 +334,39 @@ class ZermeloShowEnv(gym.Env):
     """Computes the margin (e.g. distance) between the state and the failue set.
 
     Args:
-        s (np.ndarray): the state of the agent.
+        s (np.ndarray): the state of the agent. shape (batch, n)
 
     Returns:
-        float: postivive numbers indicate being inside the failure set (safety
-            violation).
+      float: postive numbers indicate being inside the failure set (safety
+          violation).
     """
-    g_x_list = []
-
-    # constraint_set_safety_margin
-    for _, constraint_set in enumerate(self.constraint_x_y_w_h):
-      g_x = calculate_margin_rect(s, constraint_set, negativeInside=False)
-      g_x_list.append(g_x)
-
-    # enclosure_safety_margin
-    boundary_x_y_w_h = np.append(self.midpoint, self.interval)
-    g_x = calculate_margin_rect(s, boundary_x_y_w_h, negativeInside=True)
-    g_x_list.append(g_x)
-
-    safety_margin = np.max(np.array(g_x_list))
-
-    return self.scaling * safety_margin
+    gx = -np.inf*np.ones(s.shape[:-1]) # g(x) > 0 is obstacle
+    return self.scaling * gx
+  
 
   def target_margin(self, s):
     """Computes the margin (e.g. distance) between the state and the target set.
 
     Args:
-        s (np.ndarray): the state of the agent.
+        s (np.ndarray): the state of the agent. shape (batch, n)
 
     Returns:
         float: negative numbers indicate reaching the target. If the target set
             is not specified, return None.
     """
-    l_x_list = []
 
-    # target_set_safety_margin
-    for _, target_set in enumerate(self.target_x_y_w_h):
-      l_x = calculate_margin_rect(s, target_set, negativeInside=True)
-      l_x_list.append(l_x)
+    # l(x)<0 is target
+    gripper_to_obj = np.linalg.norm(s[:,0] - s[:,2]) - self.thresh
+    object_to_goal = np.linalg.norm(s[:,2]-self.goal[0]) - self.thresh
 
-    target_margin = np.max(np.array(l_x_list))
+    if 'pick_object' in self.task:
+      lx = np.maximum(gripper_to_obj, object_to_goal)
+    elif 'object_to_goal' in self.task:
+      lx = object_to_goal
+    else:
+        raise NotImplementedError('Task not defined')
 
-    return self.scaling * target_margin
+    return self.scaling * lx
 
   # == Getting Information ==
   def check_within_env(self, state):
@@ -440,54 +378,9 @@ class ZermeloShowEnv(gym.Env):
     Returns:
         bool: True if the agent is not in the environment.
     """
-    outsideTop = (state[1] >= self.bounds[1, 1])
     outsideLeft = (state[0] <= self.bounds[0, 0])
     outsideRight = (state[0] >= self.bounds[0, 1])
-    return outsideTop or outsideLeft or outsideRight
-
-  def get_constraint_set_boundary(self):
-    """Gets the constarint set boundary.
-
-    Returns:
-        np.ndarray: of the shape (#constraint, 5, 2). Since we use the box
-            constraint in this environment, we need 5 points to plot the box.
-            The last axis consists of the (x, y) position.
-    """
-    num_constarint_set = self.constraint_x_y_w_h.shape[0]
-    constraint_set_boundary = np.zeros((num_constarint_set, 5, 2))
-
-    for idx, constraint_set in enumerate(self.constraint_x_y_w_h):
-      x, y, w, h = constraint_set
-      x_l = x - w/2.0
-      x_h = x + w/2.0
-      y_l = y - h/2.0
-      y_h = y + h/2.0
-      constraint_set_boundary[idx, :, 0] = [x_l, x_l, x_h, x_h, x_l]
-      constraint_set_boundary[idx, :, 1] = [y_l, y_h, y_h, y_l, y_l]
-
-    return constraint_set_boundary
-
-  def get_target_set_boundary(self):
-    """Gets the target set boundary.
-
-    Returns:
-        np.ndarray: of the shape (#target, 5, 2). Since we use the box target
-            in this environment, we need 5 points to plot the box. The last
-            axis consists of the (x, y) position.
-    """
-    num_target_set = self.target_x_y_w_h.shape[0]
-    target_set_boundary = np.zeros((num_target_set, 5, 2))
-
-    for idx, target_set in enumerate(self.target_x_y_w_h):
-      x, y, w, h = target_set
-      x_l = x - w/2.0
-      x_h = x + w/2.0
-      y_l = y - h/2.0
-      y_h = y + h/2.0
-      target_set_boundary[idx, :, 0] = [x_l, x_l, x_h, x_h, x_l]
-      target_set_boundary[idx, :, 1] = [y_l, y_h, y_h, y_l, y_l]
-
-    return target_set_boundary
+    return outsideLeft or outsideRight
 
   def get_warmup_examples(self, num_warmup_samples=100):
     """Gets the warmup samples.
@@ -499,22 +392,15 @@ class ZermeloShowEnv(gym.Env):
         np.ndarray: sampled states.
         np.ndarray: the heuristic values, here we used max{ell, g}.
     """
-    x_min, x_max = self.bounds[0, :]
-    y_min, y_max = self.bounds[1, :]
 
-    xs = np.random.uniform(x_min, x_max, num_warmup_samples)
-    ys = np.random.uniform(y_min, y_max, num_warmup_samples)
-    heuristic_v = np.zeros((num_warmup_samples, self.action_space.n))
-    states = np.zeros((num_warmup_samples, self.observation_space.shape[0]))
+    xy_samples = np.random.uniform(low=self.low, high=self.high, size=(num_warmup_samples, 4))
 
-    for i in range(num_warmup_samples):
-      x, y = xs[i], ys[i]
-      l_x = self.target_margin(np.array([x, y]))
-      g_x = self.safety_margin(np.array([x, y]))
-      heuristic_v[i, :] = np.maximum(l_x, g_x) # for all actions same value is assigned
-      states[i, :] = x, y
+    l_x = self.target_margin(xy_samples)
+    g_x = self.safety_margin(xy_samples)
 
-    return states, heuristic_v
+    heuristic_v = np.stack([l_x, g_x],axis=1)
+
+    return xy_samples, heuristic_v
 
   def get_axes(self):
     """Gets the axes bounds and aspect_ratio.
@@ -698,7 +584,7 @@ class ZermeloShowEnv(gym.Env):
     pass
 
   def visualize(
-      self, q_func, vmin=-1, vmax=1, nx=201, ny=201, labels=None,
+      self, q_func, vmin=-1, vmax=1, labels=None,
       boolPlot=False, addBias=False, cmap='seismic'
   ):
     """
@@ -709,8 +595,6 @@ class ZermeloShowEnv(gym.Env):
         q_func (object): agent's Q-network.
         vmin (int, optional): vmin in colormap. Defaults to -1.
         vmax (int, optional): vmax in colormap. Defaults to 1.
-        nx (int, optional): # points in x-axis. Defaults to 41.
-        ny (int, optional): # points in y-axis. Defaults to 121.
         labels (list, optional): x- and y- labels. Defaults to None.
         boolPlot (bool, optional): plot the values in binary form if True.
             Defaults to False.
@@ -718,18 +602,80 @@ class ZermeloShowEnv(gym.Env):
             Defaults to False.
         cmap (str, optional): color map. Defaults to 'seismic'.
     """
+
+    _state_names = ['x_g', 'x_g_dot', 'x_o', 'x_o_dot']
+
+    _plot_state = [
+      [0,2], # x_g, x_o # keep first plot state as [0,2] always to plot trajectory on it
+      [0,2], # x_g_dot, x_o_dot
+      [0,2], # x_g, x_g_dot
+    ]
+    _slice_loc = [
+      [None, 0.,None, 0.], # velocities
+      [None, -0.5,None, 0.],
+      [None, 0.5,None, 0.],
+    ]
+
+    # Plot contour plot
+    plt_shape = [np.rint(len(_plot_state)/2).astype(int), 2]
+    fig, axes = plt.subplots(plt_shape[0], plt_shape[1], figsize=(12, 12))
+
+    for i in range(len(_plot_state)):
+        _slice = [None]*len(value_fn.shape)
+        title_str = ''
+        for j in range(len(value_fn.shape)):
+            if j in _plot_state[i]:
+                _slice[j] = slice(None) # keep all
+            else:
+                _slice[j] = np.rint(
+                    (_slice_loc[i][j] - np.min(grid_x[...,j]))/(np.max(grid_x[...,j])-np.min(grid_x[...,j])) * (value_fn.shape[0]-1)
+                ).astype(int)
+                title_str += f'{_state_names[j]}={_slice_loc[i][j]}  '
+
+        max_V = np.max(np.abs(value_fn[tuple(_slice)]))
+        axes_idx = [int(i%plt_shape[0]), int(i/plt_shape[0])]
+
+        levels=np.arange(-max_V, max_V, 0.01)
+        if len(levels) < 11:
+            levels=np.linspace(-max_V, max_V, 11)
+
+        ctr = axes[axes_idx[0],axes_idx[1]].contourf(
+            grid_x[(*_slice,_plot_state[i][0])], 
+            grid_x[(*_slice,_plot_state[i][1])], 
+            value_fn[tuple(_slice)],
+            levels=levels, cmap='seismic')
+
+        fig.colorbar(ctr, ax=axes[axes_idx[0],axes_idx[1]])
+        axes[axes_idx[0],axes_idx[1]].set_xlabel(f'{_state_names[_plot_state[i][0]]}')
+        axes[axes_idx[0],axes_idx[1]].set_ylabel(f'{_state_names[_plot_state[i][1]]}')
+        axes[axes_idx[0],axes_idx[1]].set_title(f'{title_str}')
+
+        axes[axes_idx[0],axes_idx[1]].contour(
+            grid_x[(*_slice,_plot_state[i][0])], 
+            grid_x[(*_slice,_plot_state[i][1])], 
+            value_fn[tuple(_slice)],
+            levels=[0], colors='black', linewidths=2)
+
+        targ = axes[axes_idx[0],axes_idx[1]].contour(
+            grid_x[(*_slice,_plot_state[i][0])], 
+            grid_x[(*_slice,_plot_state[i][1])], 
+            target_T[tuple(_slice)],
+            levels=[0], colors='green', linestyles='dashed')
+        axes[axes_idx[0],axes_idx[1]].clabel(targ, fontsize=12, inline=1, fmt='target')
+
+        obst = axes[axes_idx[0],axes_idx[1]].contour(
+            grid_x[(*_slice,_plot_state[i][0])], 
+            grid_x[(*_slice,_plot_state[i][1])], 
+            obstacle_T[tuple(_slice)],
+            levels=[0], colors='darkred', linestyles='dashed')
+        axes[axes_idx[0],axes_idx[1]].clabel(obst, fontsize=12, inline=1, fmt='obstacle')
+
     fig, ax = plt.subplots(1, 1, figsize=(4, 4))
     cbarPlot = True
 
-    # == Plot failure / target set ==
-    self.plot_target_failure_set(ax)
-
-    # == Plot reach-avoid set ==
-    self.plot_reach_avoid_set(ax)
-
     # == Plot V ==
     self.plot_v_values(
-        q_func, ax=ax, fig=fig, vmin=vmin, vmax=vmax, nx=nx, ny=ny, cmap=cmap,
+        q_func, ax=ax, fig=fig, vmin=vmin, vmax=vmax, cmap=cmap,
         boolPlot=boolPlot, cbarPlot=cbarPlot, addBias=addBias
     )
 
@@ -743,7 +689,7 @@ class ZermeloShowEnv(gym.Env):
     fig.tight_layout()
 
   def plot_v_values(
-      self, q_func, ax=None, fig=None, vmin=-1, vmax=1, nx=201, ny=201,
+      self, q_func, ax=None, fig=None, vmin=-1, vmax=1,
       cmap='seismic', alpha=0.8, boolPlot=False, cbarPlot=True, addBias=False
   ):
     """Plots state values.
@@ -826,84 +772,6 @@ class ZermeloShowEnv(gym.Env):
       ax.plot(traj_x, traj_y, color=c, linewidth=lw, zorder=zorder)
 
     return results
-
-  def plot_target_failure_set(
-      self, ax=None, c_c='m', c_t='y', lw=1.5, zorder=1
-  ):
-    """Plots the target and the failure set.
-
-    Args:
-        ax (matplotlib.axes.Axes, optional)
-        c_c (str, optional): color of the constraint set boundary.
-            Defaults to 'm'.
-        c_t (str, optional): color of the target set boundary.
-            Defaults to 'y'.
-        lw (float, optional): liewidth. Defaults to 1.5.
-        zorder (int, optional): graph layers order. Defaults to 1.
-    """
-    # Plot bounadries of constraint set.
-    for one_boundary in self.constraint_set_boundary:
-      ax.plot(
-          one_boundary[:, 0], one_boundary[:, 1], color=c_c, lw=lw,
-          zorder=zorder
-      )
-
-    # Plot boundaries of target set.
-    for one_boundary in self.target_set_boundary:
-      ax.plot(
-          one_boundary[:, 0], one_boundary[:, 1], color=c_t, lw=lw,
-          zorder=zorder
-      )
-
-  def plot_reach_avoid_set(self, ax=None, c='g', lw=3, zorder=1):
-    """Plots the analytic reach-avoid set.
-
-    Args:
-        ax (matplotlib.axes.Axes, optional): ax to plot. Defaults to None.
-        c (str, optional): color of the rach-avoid set boundary.
-            Defaults to 'g'.
-        lw (int, optional): liewidth. Defaults to 3.
-        zorder (int, optional): graph layers order. Defaults to 1.
-    """
-    slope = self.upward_speed / self.horizontal_rate
-
-    def get_line(slope, end_point, x_limit, ns=100):
-      x_end, y_end = end_point
-      b = y_end - slope*x_end
-
-      xs = np.linspace(x_limit, x_end, ns)
-      ys = xs*slope + b
-      return xs, ys
-
-    # unsafe set
-    for cons, cType in zip(self.constraint_x_y_w_h, self.constraint_type):
-      x, y, w, h = cons
-      x1 = x - w/2.0
-      x2 = x + w/2.0
-      y_min = y - h/2.0
-      if cType == 'C':
-        xs, ys = get_line(-slope, end_point=[x1, y_min], x_limit=x)
-        ax.plot(xs, ys, color=c, linewidth=lw, zorder=zorder)
-        xs, ys = get_line(slope, end_point=[x2, y_min], x_limit=x)
-        ax.plot(xs, ys, color=c, linewidth=lw, zorder=zorder)
-      elif cType == 'L':
-        x_limit = self.bounds[0, 0]
-        xs, ys = get_line(slope, end_point=[x2, y_min], x_limit=x_limit)
-        ax.plot(xs, ys, color=c, linewidth=lw, zorder=zorder)
-      elif cType == 'R':
-        x_limit = self.bounds[0, 1]
-        xs, ys = get_line(-slope, end_point=[x1, y_min], x_limit=x_limit)
-        ax.plot(xs, ys, color=c, linewidth=lw, zorder=zorder)
-
-    # border unsafe set
-    x, y, w, h = self.target_x_y_w_h[0]
-    x1 = x - w/2.0
-    x2 = x + w/2.0
-    y_max = y + h/2.0
-    xs, ys = get_line(slope, end_point=[x1, y_max], x_limit=self.low[0])
-    ax.plot(xs, ys, color=c, linewidth=lw, zorder=zorder)
-    xs, ys = get_line(-slope, end_point=[x2, y_max], x_limit=self.high[0])
-    ax.plot(xs, ys, color=c, linewidth=lw, zorder=zorder)
 
   def plot_formatting(self, ax=None, labels=None):
     """Formats the visualization.
