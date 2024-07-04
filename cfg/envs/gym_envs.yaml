@@ -30,3 +30,33 @@ pickup_1D_v0:
   initial_state: [0.00, 0., 0.25, 0.]
   goal: [0.5, 0]
   adjacency_calc_mode: 'nearest_grid_pt' # min_dist, nearest_grid_pt
+  return_type: 'cost'
+
+point_mass_1D_cont_env-v0:
+  task: 'goto_goal'
+  T: 2.0
+  dt: 0.05
+  mass: 1
+  state_ranges: 
+    low: [-2., -2.] # x, xdot
+    high: [2., 2.]
+  control_low: [-1.]
+  control_high: [1.]
+  N_x: [101, 101]  # Number of grid points per state dimension
+  N_u: [51] # Number of grid points per control dimension
+  initial_state: [1.0, -1.0]
+  target_set:
+    low: [-0.5, -2]
+    high: [0.5, 2]
+  obstacle_set:
+    low: [-1.5, -2]
+    high: [-1.0, 2]
+  adjacency_calc_mode: 'nearest_grid_pt' # min_dist, nearest_grid_pt
+  penalty: 10.
+  reward: -10.
+  costType: 'dense'
+  scaling: 1.0
+  return_type: 'cost'
+  mode: 'lagrange'
+  doneType: 'toEnd'
+  sample_inside_obs: False

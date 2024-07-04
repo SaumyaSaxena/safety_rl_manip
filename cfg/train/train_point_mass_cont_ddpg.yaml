@@ -1,0 +1,35 @@
+debug: False
+gpu: 0
+seed: 0
+tag: ${now:%Y-%m-%d-%H-%M-%S}
+run_name: "train_point_mass_cont_DDPG_RL_${train.mode}" 
+
+hydra:
+  run:
+    dir: outputs/${train.run_name}/${train.tag}
+
+defaults:
+  - /envs: gym_envs.yaml
+  - _self_
+
+wandb:
+  entity: iam-lab
+  group: drabe
+  project: safety_rl_manip
+  name: ${train.run_name}
+  saver:
+    upload: True
+    save_top_k: 5
+    save_freq: 10
+wandb_resume_id: null
+
+env_name: "point_mass_1D_cont_env-v0"
+envs:
+  point_mass_1D_cont_env-v0:
+    doneType: 'all'
+    return_type: 'reward'
+    mode: ${train.mode}
+    costType: 'max_ell_g'
+
+# RL
+mode: RA # RA, lagrange

@@ -63,6 +63,7 @@ class Pickup1DEnv(gym.Env):
     self.reward = -1.
     self.costType = 'sparse'
     self.scaling = 1.
+    self.return_type = cfg.return_type
 
     self.state = np.zeros(self.n)
     self.doneType = cfg.doneType
@@ -72,8 +73,6 @@ class Pickup1DEnv(gym.Env):
       np.array([-0.5, 0., 0., 0.]),
       np.array([0.5, 0., 0., 0.]),
     ]
-
-    
 
     print(
         "Env: mode-{:s}; doneType-{:s}; sample_inside_obs-{}".format(
@@ -216,6 +215,9 @@ class Pickup1DEnv(gym.Env):
       info = {"g_x": self.penalty * self.scaling, "l_x": l_x}
     else:
       info = {"g_x": g_x, "l_x": l_x}
+    
+    if 'reward' in self.return_type:
+      cost = -1.*cost
     return np.copy(self.state), cost, done, info
 
   def integrate_forward(self, state, ut):
