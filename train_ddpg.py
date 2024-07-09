@@ -37,15 +37,11 @@ def main(cfg):
     # Making env
     env_name = cfg.env_name
     env_cfg = cfg.envs[env_name]
-
-    if env_cfg.doneType == 'toEnd':
-        env_cfg.sample_inside_obs = True
-    elif env_cfg.doneType == 'TF' or env_cfg.doneType == 'fail':
-        env_cfg.sample_inside_obs = False
+    train_cfg = cfg.train_cfg
     
     agent = DDPG(
-        env_name, device, env_cfg=env_cfg,
-        mode=cfg.mode, outFolder=hydra_dir, debug=cfg.debug
+        env_name, device, train_cfg=train_cfg, env_cfg=env_cfg,
+        outFolder=hydra_dir, debug=cfg.debug
     )
 
     agent.learn()

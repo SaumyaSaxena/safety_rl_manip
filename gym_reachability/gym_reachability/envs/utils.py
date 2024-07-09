@@ -8,3 +8,8 @@ def signed_dist_fn_rectangle(grid_x, x_target_min, x_target_max, obstacle=False,
         signed_distance_grid = -1*signed_distance_grid
 
     return signed_distance_grid
+
+def create_grid(x_min, x_max, N_x):
+    X = [np.linspace(x_min[i], x_max[i], N_x[i]) for i in range(len(x_min))]
+    grid = np.meshgrid(*X, indexing='ij')
+    return np.stack(grid, axis=-1)

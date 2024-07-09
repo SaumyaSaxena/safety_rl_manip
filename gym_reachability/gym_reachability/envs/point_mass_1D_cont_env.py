@@ -5,7 +5,7 @@ import matplotlib.pyplot as plt
 import torch
 import random
 import os
-from .utils import signed_dist_fn_rectangle
+from .utils import signed_dist_fn_rectangle, create_grid
 
 class PointMass1DContEnv(gym.Env):
 
@@ -17,7 +17,8 @@ class PointMass1DContEnv(gym.Env):
     self.m = 1
     self.dt = cfg.dt
     self.mode = cfg.mode
-    
+    self.sample_inside_obs = cfg.sample_inside_obs
+
     self.task = cfg.task
     self.goal = (self.env_cfg.target_set.high[0] + self.env_cfg.target_set.low[0])/2
     self.goal_rad = (self.env_cfg.target_set.high[0] - self.env_cfg.target_set.low[0])/2
@@ -27,15 +28,15 @@ class PointMass1DContEnv(gym.Env):
 
     self.low = self.bounds[:, 0]
     self.high = self.bounds[:, 1]
-    self.sample_inside_obs = cfg.sample_inside_obs
     self.device = device
 
     # Set random seed.
     self.set_costParam()
 
-    X = [np.linspace(self.low[i], self.high[i], self.N_x[i]) for i in range(self.n)]
-    self.grid_x = np.stack(np.meshgrid(*X, indexing='ij'), axis=-1)
+    self.grid_x = create_grid(self.low, self.high, self.N_x)
     self.grid_x_flat = torch.from_numpy(self.grid_x.reshape(-1, self.grid_x.shape[-1])).float().to(self.device)
+    
+
     self.target_T = self.target_margin(self.grid_x)
     self.obstacle_T = self.safety_margin(self.grid_x)
     
@@ -51,7 +52,6 @@ class PointMass1DContEnv(gym.Env):
         np.float32(self.midpoint + self.interval / 2)
     )
     self.viewer = None
-
 
     self.state = np.zeros(self.n)
     self.doneType = cfg.doneType
@@ -198,39 +198,6 @@ class PointMass1DContEnv(gym.Env):
     self.scaling = self.env_cfg.scaling
     self.return_type = self.env_cfg.return_type
 
-
-
-  def set_bounds(self, bounds):
-    """Sets the boundary and the observation_space of the environment.
-
-    Args:
-        bounds (np.ndarray): of the shape (n_dim, 2). Each row is [LB, UB].
-    """
-    self.bounds = bounds
-
-    # Get lower and upper bounds
-    self.low = np.array(self.bounds)[:, 0]
-    self.high = np.array(self.bounds)[:, 1]
-
-    # Double the range in each state dimension for Gym interface.
-    midpoint = (self.low + self.high) / 2.0
-    interval = self.high - self.low
-    self.observation_space = gym.spaces.Box(
-        np.float32(midpoint - interval/2), np.float32(midpoint + interval/2)
-    )
-
-  def set_sample_type(self, sample_inside_obs=False, verbose=False):
-    """Sets the type of the sampling method.
-
-    Args:
-        sample_inside_obs (bool, optional): consider sampling the state inside
-            the obstacles if True. Defaults to False.
-        verbose (bool, optional): print messages if True. Defaults to False.
-    """
-    self.sample_inside_obs = sample_inside_obs
-    if verbose:
-      print("sample_inside_obs-{}".format(self.sample_inside_obs))
-
   # == Getting Margin ==
   def safety_margin(self, s):
     """Computes the margin (e.g. distance) between the state and the failue set.
@@ -372,3 +339,23 @@ class PointMass1DContEnv(gym.Env):
 
     plt.savefig(save_plot_name)
     plt.close()
+
+  def get_GT_value_fn(self):
+    outputs = np.load("/home/saumyas/Projects/safe_control/HJR_manip/outputs/DoubleIntegrator/goto_goal_inf_horizon/value_fn_inf_horizon_DoubleIntegrator_goto_goal_grid_Nx_101_101_Nu_51_dt_0.05_T_2.0.npz")
+
+    value_fn = outputs['value_fn']
+    min_u_idx = outputs['min_u_idx']
+    grid_x = outputs['grid_x']
+    grid_x_u = outputs['grid_x_u']
+    grid_x_tp1 = outputs['grid_x_tp1']
+    target_T = outputs['target_T']
+    obstacle_T = outputs['obstacle_T']
+    t_series = outputs['t_series']
+
+    return value_fn, grid_x
+    
+    
+
+    
+
+    

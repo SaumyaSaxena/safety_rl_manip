@@ -2,7 +2,7 @@ debug: False
 gpu: 0
 seed: 0
 tag: ${now:%Y-%m-%d-%H-%M-%S}
-run_name: "train_point_mass_cont_DDPG_RL_${train.mode}" 
+run_name: "train_point_mass_cont_DDPG_RL_${train.train_cfg.mode}" 
 
 hydra:
   run:
@@ -28,8 +28,27 @@ envs:
   point_mass_1D_cont_env-v0:
     doneType: 'all'
     return_type: 'reward'
-    mode: ${train.mode}
+    mode: ${train.train_cfg.mode}
     costType: 'max_ell_g'
 
-# RL
-mode: RA # RA, lagrange
+train_cfg:
+  mode: 'lagrange' # RA, lagrange
+  seed: ${train.seed}
+  steps_per_epoch: 4000
+  epochs: 200
+  replay_size: 1e+6
+  gamma: 0.99
+  polyak: 0.995
+  pi_lr: 1e-3 
+  q_lr: 1e-3
+  batch_size: 500
+  start_steps: 10000
+  update_after: 1000
+  update_every: 50
+  act_noise: 0.1
+  num_test_episodes: 10
+  max_ep_len: 200
+  save_freq: 2
+  ac_kwargs:
+    hidden_sizes: [256,256]
+

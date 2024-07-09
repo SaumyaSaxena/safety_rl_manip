@@ -12,9 +12,6 @@ dubins_car-v1:
   sample_inside_tar: True
 
 pickup_1D_v0:
-  mode: 'RA'
-  doneType: 'toEnd'
-  sample_inside_obs: False
   task: 'pick_object' # gripper_to_goal, reach_object, pick_object, object_to_goal, slow_pick
   T: 10.0
   dt: 0.05
@@ -31,6 +28,12 @@ pickup_1D_v0:
   goal: [0.5, 0]
   adjacency_calc_mode: 'nearest_grid_pt' # min_dist, nearest_grid_pt
   return_type: 'cost'
+  mode: 'RA'
+  doneType: 'toEnd'
+  penalty: 10.
+  reward: -10.
+  costType: 'dense'
+  scaling: 1.0
 
 point_mass_1D_cont_env-v0:
   task: 'goto_goal'
@@ -59,4 +62,4 @@ point_mass_1D_cont_env-v0:
   return_type: 'cost'
   mode: 'lagrange'
   doneType: 'toEnd'
-  sample_inside_obs: False
+  sample_inside_obs: True

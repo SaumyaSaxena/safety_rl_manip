@@ -5,10 +5,12 @@ import torch
 from torch.optim import Adam
 import gym
 import time
+import json
 from . import DDPG_core
 import wandb
 import random
 from tqdm import trange
+from .utils import calc_false_pos_neg_rate
 
 class ReplayBuffer:
     """
@@ -134,40 +136,44 @@ class DDPG(torch.nn.Module):
 
     """
     def __init__(
-        self, env_name, device, env_cfg,
-        actor_critic=DDPG_core.MLPActorCritic, ac_kwargs=dict(), seed=0, 
-        steps_per_epoch=4000, epochs=200, replay_size=int(1e6), gamma=0.99, 
-        polyak=0.995, pi_lr=1e-3, q_lr=1e-3, batch_size=500, start_steps=10000, 
-        update_after=1000, update_every=50, act_noise=0.1, num_test_episodes=10, 
-        max_ep_len=200, save_freq=2,
-        mode='RA', outFolder='', debug=False,
+        self, env_name, device, train_cfg=None, env_cfg=None,
+        outFolder='', debug=False,
     ):
         super().__init__()
-        self.gamma = gamma
-        self.polyak = polyak
-        
-        self.num_test_episodes = num_test_episodes
-        self.max_ep_len = max_ep_len
-        self.batch_size = batch_size
-        self.update_every = update_every
-        self.update_after = update_after
-        self.act_noise = act_noise
-        self.steps_per_epoch = steps_per_epoch
-        self.epochs = epochs
-        self.start_steps = start_steps
-        self.debug = debug
+        self.env_name = env_name
         self.device = device
-        self.save_freq = save_freq
-        self.mode = mode
+        self.train_cfg = train_cfg
+        self.env_cfg = env_cfg
 
-        self.set_seed(seed)
+        self.mode = train_cfg.mode
+        self.seed = train_cfg.seed
+        self.steps_per_epoch = train_cfg.steps_per_epoch
+        self.epochs = train_cfg.epochs
+        self.replay_size = int(train_cfg.replay_size)
+        self.gamma = train_cfg.gamma
+        self.polyak = train_cfg.polyak
+        self.pi_lr = train_cfg.pi_lr
+        self.q_lr = train_cfg.q_lr
+        self.batch_size = train_cfg.batch_size
+        self.start_steps = train_cfg.start_steps
+        self.update_after = train_cfg.update_after
+        self.update_every = train_cfg.update_every
+        self.act_noise = train_cfg.act_noise
+        self.num_test_episodes = train_cfg.num_test_episodes
+        self.max_ep_len = train_cfg.max_ep_len
+        self.save_freq = train_cfg.save_freq
+        
+        self.outFolder = outFolder
+        self.debug = debug
+
+        self.set_seed(self.seed)
 
         self.env = gym.make(env_name, device=device, cfg=env_cfg)
         self.test_env = gym.make(env_name, device=device, cfg=env_cfg)
 
-        figureFolder = os.path.join(outFolder, 'figure')
-        os.makedirs(figureFolder, exist_ok=True)
-        self.env.plot_env(save_dir=figureFolder)
+        self.figureFolder = os.path.join(outFolder, 'figure')
+        os.makedirs(self.figureFolder, exist_ok=True)
+        self.env.plot_env(save_dir=self.figureFolder)
 
         self.obs_dim = self.env.observation_space.shape
         self.act_dim = self.env.action_space.shape[0]
@@ -176,7 +182,9 @@ class DDPG(torch.nn.Module):
         self.act_limit = self.env.action_space.high[0]
 
         # Create actor-critic module and target networks
-        self.ac = actor_critic(self.env.observation_space, self.env.action_space, **ac_kwargs).to(self.device)
+        self.ac = DDPG_core.MLPActorCritic(self.env.observation_space, 
+            self.env.action_space, 
+            **train_cfg.ac_kwargs).to(self.device)
         self.ac_targ = deepcopy(self.ac).to(self.device)
 
         # Freeze target networks with respect to optimizers (only update via polyak averaging)
@@ -184,17 +192,14 @@ class DDPG(torch.nn.Module):
             p.requires_grad = False
 
         # Experience buffer
-        self.replay_buffer = ReplayBuffer(obs_dim=self.obs_dim, act_dim=self.act_dim, size=replay_size, device=device)
+        self.replay_buffer = ReplayBuffer(obs_dim=self.obs_dim, act_dim=self.act_dim, size=self.replay_size, device=device)
 
         # Set up optimizers for policy and q-function
-        self.pi_optimizer = Adam(self.ac.pi.parameters(), lr=pi_lr)
-        self.q_optimizer = Adam(self.ac.q.parameters(), lr=q_lr)
+        self.pi_optimizer = Adam(self.ac.pi.parameters(), lr=self.pi_lr)
+        self.q_optimizer = Adam(self.ac.q.parameters(), lr=self.q_lr)
 
         self.modelFolder = os.path.join(outFolder, "model")
         os.makedirs(self.modelFolder, exist_ok=True)
-
-        self.figureFolder = os.path.join(outFolder, "figure")
-        os.makedirs(self.figureFolder, exist_ok=True)
 
     def set_seed(self, seed):
         self.seed_val = seed
@@ -267,9 +272,6 @@ class DDPG(torch.nn.Module):
         # Unfreeze Q-network so you can optimize it at next DDPG step.
         for p in self.ac.q.parameters():
             p.requires_grad = True
-
-        # # Record things
-        # logger.store(LossQ=loss_q.item(), LossPi=loss_pi.item(), **loss_info)
 
         # Finally, update target networks by polyak averaging.
         with torch.no_grad():
@@ -386,7 +388,19 @@ class DDPG(torch.nn.Module):
                 if (epoch % self.save_freq == 0) or (epoch == self.epochs):
                     print(f"Saving model at epoch: {epoch}")
                     save_file_name = os.path.join(self.modelFolder, f"step_{t}_test_return_{avg_test_return:.2f}.pth")
-                    torch.save(self.state_dict(), save_file_name)
+
+                    torch.save(
+                        obj={
+                            "state_dict": self.state_dict(),
+                            "env_name": self.env_name,
+                            "train_cfg": self.train_cfg,
+                            "env_cfg": self.env_cfg,
+                            "pi_optimizer_state": self.pi_optimizer.state_dict(),
+                            "q_optimizer_state": self.q_optimizer.state_dict(),
+                            "epoch": epoch,
+                        },
+                        f=save_file_name,
+                    )
                     if not self.debug:
                         wandb.save(save_file_name, base_path=os.path.join(self.modelFolder, '..'))
 
@@ -405,4 +419,25 @@ class DDPG(torch.nn.Module):
             self.ac_targ.pi(self.test_env.grid_x_flat))
         v = v.reshape(*self.test_env.grid_x.shape[:-1])
         return v
+
+    def eval(self, ckpt):
+        self.load_state_dict(ckpt["state_dict"])
+        GT_value_fn, GT_grid_x = self.test_env.get_GT_value_fn()
+        GT_value_fn_flat = GT_value_fn.reshape(-1, GT_value_fn.shape[-1])
+        GT_grid_flat = torch.from_numpy(GT_grid_x.reshape(-1, GT_grid_x.shape[-1])).float().to(self.device)
+
+        pred_value_fn_flat = self.ac_targ.q(
+            GT_grid_flat, 
+            self.ac_targ.pi(GT_grid_flat)).detach().cpu().numpy()
+
+        false_pos_rate, false_neg_rate = calc_false_pos_neg_rate(pred_value_fn_flat, GT_value_fn_flat)
+
+        # Save results
+        results = {
+            'false_pos_rate': false_pos_rate,
+            'false_neg_rate': false_neg_rate,
+        }
+        fname = os.path.join(self.outFolder, 'results.json')
+        with open(fname, "w") as f:
+            json.dump(results, f, indent=4)
 

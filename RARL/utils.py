@@ -11,6 +11,7 @@ import glob
 import pickle
 import torch
 import wandb
+import numpy as np
 
 def soft_update(target, source, tau):
   """Uses soft_update method to update the target network.
@@ -78,3 +79,19 @@ def load_obj(filename):
   """
   with open(filename + ".pkl", "rb") as f:
     return pickle.load(f)
+
+def calc_false_pos_neg_rate(pred_v, GT_v):
+  pred_success = pred_v < 0.
+  GT_success = GT_v < 0.
+
+  FP = np.sum((GT_success == False) and (pred_success == True))
+  FN = np.sum((GT_success == True) and (pred_success == False))
+
+  TP = np.sum((GT_success == True) and (pred_success == True))
+  TN = np.sum((GT_success == False) and (pred_success == False))
+
+  false_pos_rate = FP/(FP+TN)
+  false_neg_rate = FN/(FN+TP)
+
+  return false_pos_rate, false_neg_rate
+
