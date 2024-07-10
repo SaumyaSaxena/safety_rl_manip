@@ -10,11 +10,12 @@ from omegaconf import OmegaConf
 
 from RARL.DDPG import DDPG
 
-from gym_reachability import gym_reachability  # Custom Gym env.
+from gym_reachability import gym_reachability  # register Custom Gym envs.
 
 logger = logging.getLogger(__name__)
 
-@hydra.main(config_path='cfg/', config_name='train/train_point_mass_cont_ddpg.yaml')
+@hydra.main(config_path='cfg/', config_name='train/train_pickup1D_ddpg.yaml')
+# @hydra.main(config_path='cfg/', config_name='train/train_point_mass_cont_ddpg.yaml')
 def main(cfg):
     hydra_dir = Path(os.getcwd())
     cfg = cfg.train
@@ -34,7 +35,6 @@ def main(cfg):
         else torch.device("cpu")
     )
 
-    # Making env
     env_name = cfg.env_name
     env_cfg = cfg.envs[env_name]
     train_cfg = cfg.train_cfg

@@ -225,15 +225,20 @@ class DDPG(torch.nn.Module):
                 backup = torch.zeros(q.shape).float().to(self.device)
                 done = d > 0.
                 not_done = torch.logical_not(done)
-                non_terminal = torch.max(
-                    gx[not_done],
-                    torch.min(lx[not_done], q_pi_targ[not_done]),
-                )
-                terminal = torch.max(lx, gx)
 
+                # Maximize value function
+                lx = -1.*lx # lx > 0 is target set
+                gx = -1.*gx # gx < 0 is failure set
+
+                non_terminal = torch.min(
+                    gx[not_done],
+                    torch.max(lx[not_done], q_pi_targ[not_done]),
+                )
+                terminal = torch.min(lx, gx)
                 # normal state
-                backup[not_done] = -1.*(non_terminal * self.gamma + terminal[not_done] * (1 - self.gamma))
-                backup[done] = -1.*(terminal[done])
+                backup[not_done] = non_terminal * self.gamma + terminal[not_done] * (1 - self.gamma)
+                backup[done] = terminal[done]
+
             else:
                 backup = r + self.gamma * (1 - d) * q_pi_targ
 
@@ -316,7 +321,13 @@ class DDPG(torch.nn.Module):
 
         # Plot value function
         v = self.get_value_fn()
-        self.test_env.plot_value_fn(v.detach().cpu().numpy(), trajs=trajs, save_dir=self.figureFolder, name=f'epoch_{epoch}')
+        self.test_env.plot_value_fn(v.detach().cpu().numpy(),
+            self.test_env.grid_x,
+            target_T=self.test_env.target_T,
+            obstacle_T=self.test_env.obstacle_T,
+            trajs=trajs, 
+            save_dir=self.figureFolder, 
+            name=f'epoch_{epoch}')
 
         return avg_test_return, avg_test_ep_len
 
@@ -329,6 +340,7 @@ class DDPG(torch.nn.Module):
 
         # Main loop: collect experience in env and update/log each epoch
         for t in trange(total_steps):
+            torch.cuda.empty_cache()
             if not self.debug:
                 log_dict = {}
             
@@ -414,6 +426,8 @@ class DDPG(torch.nn.Module):
                 wandb.log(log_dict, step=t)
     
     def get_value_fn(self):
+        # v = torch.zeros(self.test_env.grid_x_flat.shape[:-1]).to(self.device)
+
         v = self.ac_targ.q(
             self.test_env.grid_x_flat, 
             self.ac_targ.pi(self.test_env.grid_x_flat))
@@ -422,13 +436,14 @@ class DDPG(torch.nn.Module):
 
     def eval(self, ckpt):
         self.load_state_dict(ckpt["state_dict"])
-        GT_value_fn, GT_grid_x = self.test_env.get_GT_value_fn()
-        GT_value_fn_flat = GT_value_fn.reshape(-1, GT_value_fn.shape[-1])
+        GT_value_fn, GT_grid_x, GT_target_T, GT_obstacle_T = self.test_env.get_GT_value_fn()
+        GT_value_fn_flat = GT_value_fn.flatten()
         GT_grid_flat = torch.from_numpy(GT_grid_x.reshape(-1, GT_grid_x.shape[-1])).float().to(self.device)
 
         pred_value_fn_flat = self.ac_targ.q(
             GT_grid_flat, 
             self.ac_targ.pi(GT_grid_flat)).detach().cpu().numpy()
+        pred_value_fn = pred_value_fn_flat.reshape(*GT_grid_x.shape[:-1])
 
         false_pos_rate, false_neg_rate = calc_false_pos_neg_rate(pred_value_fn_flat, GT_value_fn_flat)
 
@@ -441,3 +456,23 @@ class DDPG(torch.nn.Module):
         with open(fname, "w") as f:
             json.dump(results, f, indent=4)
 
+        print(f"Saving FPR={false_pos_rate}; FNR={false_neg_rate} results to: {str(fname)}")
+        
+        #Plotting value functions
+        self.test_env.plot_value_fn(
+            GT_value_fn,
+            GT_grid_x,
+            target_T=GT_target_T,
+            obstacle_T=GT_obstacle_T,
+            save_dir=self.figureFolder,
+            name=f'GT_value_fn_inf_horiron')
+        
+        self.test_env.plot_value_fn(
+            pred_value_fn,
+            GT_grid_x,
+            target_T=GT_target_T,
+            obstacle_T=GT_obstacle_T,
+            save_dir=self.figureFolder,
+            name=f'Pred_value_fn_inf_horizon')
+
+        print(f"Saving predicted and GT value fn plots to: {str(self.figureFolder)}")

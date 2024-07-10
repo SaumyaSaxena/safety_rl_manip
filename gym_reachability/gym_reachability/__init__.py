@@ -41,7 +41,7 @@ register(
 )
 
 register(
-    id="pickup_1D_env-v0",
+    id="pickup1D_env-v0",
     entry_point="gym_reachability.gym_reachability.envs:Pickup1DEnv"
 )
 

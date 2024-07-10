@@ -1,5 +1,5 @@
 debug: False
-gpu: 0
+gpu: 2
 seed: 0
 tag: ${now:%Y-%m-%d-%H-%M-%S}
 run_name: "train_point_mass_cont_DDPG_RL_${train.train_cfg.mode}" 
@@ -32,7 +32,7 @@ envs:
     costType: 'max_ell_g'
 
 train_cfg:
-  mode: 'lagrange' # RA, lagrange
+  mode: 'RA' # RA, lagrange
   seed: ${train.seed}
   steps_per_epoch: 4000
   epochs: 200

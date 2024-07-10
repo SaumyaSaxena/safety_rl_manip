@@ -9,6 +9,8 @@ from omegaconf import OmegaConf
 
 from RARL.DDPG import DDPG
 
+from gym_reachability import gym_reachability  # register Custom Gym envs.
+
 logger = logging.getLogger(__name__)
 
 def main():
@@ -19,13 +21,13 @@ def main():
     eval_cfg = cfg.eval_cfg
     
     device = (
-        torch.device("cuda", cfg.gpu)
+        torch.device("cuda", eval_cfg.gpu)
         if torch.cuda.is_available()
         else torch.device("cpu")
     )
 
     time_str = time.strftime("%Y_%m_%d_%H_%M_%S")
-    eval_path = os.path('outputs/evals')
+    eval_path = Path('outputs/evals')
     model_path = os.path.join(eval_path, 'ckpts')
 
     # Load checkpoint

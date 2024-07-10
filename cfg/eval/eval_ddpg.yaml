@@ -1,7 +1,8 @@
 tag: ${now:%Y-%m-%d-%H-%M-%S}
+debug: True
 
 eval_cfg:
   gpu: 0
   wandb_load:
-    run_path: 'iam-lab/HJR_manip/g16vp244'
-    file: checkpoints/mixed_ckpt_epoch_2320_loss_0.119.pth
+    run_path: 'iam-lab/safety_rl_manip/v0io0fyc'
+    file: model/step_799999_test_return_4.00.pth

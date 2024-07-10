@@ -270,7 +270,7 @@ class PointMass1DContEnv(gym.Env):
 
     return xy_samples, heuristic_v
 
-  def plot_value_fn(self, value_fn, trajs=[], save_dir='', name=''):
+  def plot_value_fn(self, value_fn, grid_x, target_T=None, obstacle_T=None, trajs=[], save_dir='', name=''):
       
     save_plot_name = os.path.join(save_dir, f'Value_fn_{name}.png')
     # Plot contour plot
@@ -278,19 +278,21 @@ class PointMass1DContEnv(gym.Env):
 
     max_V = np.max(np.abs(value_fn))
     levels=np.arange(-max_V, max_V, 0.01)
-    levels=np.linspace(-max_V, max_V, 11) if len(levels) < 11 else levels
-    plt.contourf(self.grid_x[...,0], self.grid_x[...,1], value_fn, levels=levels, cmap='seismic')
+    levels=np.linspace(-max_V, max_V, 5) if len(levels) < 5 else levels
+    plt.contourf(grid_x[...,0], grid_x[...,1], value_fn, levels=levels, cmap='seismic')
     
     plt.colorbar(label='Value fn')
     plt.xlabel('X')
     plt.ylabel('X dot')
 
-    plt.contour(self.grid_x[...,0], self.grid_x[...,1], value_fn, levels=[0], colors='black', linewidths=2)
+    plt.contour(grid_x[...,0], grid_x[...,1], value_fn, levels=[0], colors='black', linewidths=2)
 
-    targ = plt.contour(self.grid_x[...,0], self.grid_x[...,1], self.target_T, levels=[0], colors='green', linestyles='dashed')
-    plt.clabel(targ, fontsize=12, inline=1, fmt='target')
-    obst = plt.contour(self.grid_x[...,0], self.grid_x[...,1], self.obstacle_T, levels=[0], colors='darkred', linestyles='dashed')
-    plt.clabel(obst, fontsize=12, inline=1, fmt='obstacle')
+    if target_T is not None:
+      targ = plt.contour(grid_x[...,0], grid_x[...,1], target_T, levels=[0], colors='green', linestyles='dashed')
+      plt.clabel(targ, fontsize=12, inline=1, fmt='target')
+    if obstacle_T is not None:
+      obst = plt.contour(grid_x[...,0], grid_x[...,1], obstacle_T, levels=[0], colors='darkred', linestyles='dashed')
+      plt.clabel(obst, fontsize=12, inline=1, fmt='obstacle')
 
     for traj in trajs:
       plt.plot(traj[:,0],traj[:,1])
@@ -341,7 +343,7 @@ class PointMass1DContEnv(gym.Env):
     plt.close()
 
   def get_GT_value_fn(self):
-    outputs = np.load("/home/saumyas/Projects/safe_control/HJR_manip/outputs/DoubleIntegrator/goto_goal_inf_horizon/value_fn_inf_horizon_DoubleIntegrator_goto_goal_grid_Nx_101_101_Nu_51_dt_0.05_T_2.0.npz")
+    outputs = np.load("/home/saumyas/Projects/safe_control/HJR_manip/.outputs/DoubleIntegrator/goto_goal_inf_horizon/value_fn_inf_horizon_DoubleIntegrator_goto_goal_grid_Nx_101_101_Nu_51_dt_0.05_T_5.00.npz")
 
     value_fn = outputs['value_fn']
     min_u_idx = outputs['min_u_idx']
@@ -352,7 +354,7 @@ class PointMass1DContEnv(gym.Env):
     obstacle_T = outputs['obstacle_T']
     t_series = outputs['t_series']
 
-    return value_fn, grid_x
+    return value_fn, grid_x, target_T, obstacle_T
     
     
 

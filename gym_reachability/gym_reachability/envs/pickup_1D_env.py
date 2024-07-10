@@ -29,12 +29,14 @@ class Pickup1DEnv(gym.Env):
     self.thresh = cfg.thresh
     self.task = cfg.task
     self.goal = cfg.goal
+    self.mode = cfg.mode
 
     self.N_x = cfg.N_x  # Number of grid points per dimension
     self.bounds = np.array([cfg.state_ranges.low, cfg.state_ranges.high]).T
 
     self.low = self.bounds[:, 0]
     self.high = self.bounds[:, 1]
+    self.sample_inside_obs = cfg.sample_inside_obs
     self.device = device
 
     self.set_costParam()
@@ -65,13 +67,14 @@ class Pickup1DEnv(gym.Env):
         self.sample_inside_obs = True
     elif self.doneType == 'TF' or self.doneType == 'fail':
         self.sample_inside_obs = False
+    
 
     # Visualization Parameters
     self.visual_initial_states = [
       np.array([-0.5, 0., 0., 0.]),
       np.array([0.5, 0., 0., 0.]),
     ]
-
+    
     # Define dynamics parameters
     Apart = np.array(([1., cfg.dt],
                       [0., 1.]))
@@ -159,7 +162,7 @@ class Pickup1DEnv(gym.Env):
         dict: consist of target margin and safety margin at the new state.
     """
     self._current_timestep += 1
-    ut = np.array(action[0])
+    ut = np.array(action)
     state, [l_x, g_x] = self.integrate_forward(self.state, ut)
     self.state = state
 
@@ -241,22 +244,17 @@ class Pickup1DEnv(gym.Env):
         np.ndarray: next state.
     """
     xt = state.reshape(4,1)
+    ut = ut.reshape(1,1)
     if self._modet == self._modetm1:
-      self.At = self._A.copy()
       if self._modet == 0:
           xtp1 = self._A@xt + self._B1@ut
-          self.Bt = self._B1.copy()
       else:
           xtp1 = self._A@xt + self._B2@ut
-          self.Bt = self._B2.copy()
     else:
-      self.At = self._A@self._C
       if self._modet == 0:
           xtp1 = self._A@self._C@xt + self._B1@ut
-          self.Bt = self._B1.copy()
       else:
           xtp1 = self._A@self._C@xt + self._B2@ut
-          self.Bt = self._B2.copy()
 
     xtp1 = xtp1.flatten()
     modetp1 = self._find_mode(xtp1[0], xtp1[2])
@@ -296,8 +294,8 @@ class Pickup1DEnv(gym.Env):
     """
 
     # l(x)<0 is target
-    gripper_to_obj = np.linalg.norm(s[:,0] - s[:,2]) - self.thresh
-    object_to_goal = np.linalg.norm(s[:,2]-self.goal[0]) - self.thresh
+    gripper_to_obj = np.abs(s[...,0] - s[...,2]) - self.thresh
+    object_to_goal = np.abs(s[...,2]-self.goal[0]) - self.thresh
 
     if 'pick_object' in self.task:
       lx = np.maximum(gripper_to_obj, object_to_goal)
@@ -342,7 +340,7 @@ class Pickup1DEnv(gym.Env):
 
     return xy_samples, heuristic_v
 
-  def plot_value_fn(self, value_fn, trajs=[], save_dir='', name=''):
+  def plot_value_fn(self, value_fn, grid_x, target_T=None, obstacle_T=None, trajs=[], save_dir='', name=''):
     _state_names = ['x_g', 'x_g_dot', 'x_o', 'x_o_dot']
 
     _plot_state = [
@@ -375,7 +373,7 @@ class Pickup1DEnv(gym.Env):
           _slice[j] = slice(None) # keep all
         else:
           _slice[j] = np.rint(
-              (_slice_loc[i][j] - np.min(self.grid_x[...,j]))/(np.max(self.grid_x[...,j])-np.min(self.grid_x[...,j])) * (value_fn.shape[0]-1)
+              (_slice_loc[i][j] - np.min(grid_x[...,j]))/(np.max(grid_x[...,j])-np.min(grid_x[...,j])) * (value_fn.shape[j]-1)
           ).astype(int)
           title_str += f'{_state_names[j]}={_slice_loc[i][j]}  '
 
@@ -387,8 +385,8 @@ class Pickup1DEnv(gym.Env):
         levels=np.linspace(-max_V, max_V, 11)
 
       ctr = axes[axes_idx[0],axes_idx[1]].contourf(
-        self.grid_x[(*_slice,_plot_state[i][0])], 
-        self.grid_x[(*_slice,_plot_state[i][1])], 
+        grid_x[(*_slice,_plot_state[i][0])], 
+        grid_x[(*_slice,_plot_state[i][1])], 
         value_fn[tuple(_slice)],
         levels=levels, cmap='seismic')
 
@@ -398,24 +396,24 @@ class Pickup1DEnv(gym.Env):
       axes[axes_idx[0],axes_idx[1]].set_title(f'{title_str}')
 
       axes[axes_idx[0],axes_idx[1]].contour(
-        self.grid_x[(*_slice,_plot_state[i][0])], 
-        self.grid_x[(*_slice,_plot_state[i][1])], 
+        grid_x[(*_slice,_plot_state[i][0])], 
+        grid_x[(*_slice,_plot_state[i][1])], 
         value_fn[tuple(_slice)],
         levels=[0], colors='black', linewidths=2)
 
       targ = axes[axes_idx[0],axes_idx[1]].contour(
-        self.grid_x[(*_slice,_plot_state[i][0])], 
-        self.grid_x[(*_slice,_plot_state[i][1])], 
-        self.target_T[tuple(_slice)],
+        grid_x[(*_slice,_plot_state[i][0])], 
+        grid_x[(*_slice,_plot_state[i][1])], 
+        target_T[tuple(_slice)],
         levels=[0], colors='green', linestyles='dashed')
-      axes[axes_idx[0],axes_idx[1]].clabel(targ, fontsize=12, inline=1, fmt='target')
+      # axes[axes_idx[0],axes_idx[1]].clabel(targ, fontsize=8, inline=1, fmt='target')
 
       obst = axes[axes_idx[0],axes_idx[1]].contour(
-        self.grid_x[(*_slice,_plot_state[i][0])], 
-        self.grid_x[(*_slice,_plot_state[i][1])], 
-        self.obstacle_T[tuple(_slice)],
+        grid_x[(*_slice,_plot_state[i][0])], 
+        grid_x[(*_slice,_plot_state[i][1])], 
+        obstacle_T[tuple(_slice)],
         levels=[0], colors='darkred', linestyles='dashed')
-      axes[axes_idx[0],axes_idx[1]].clabel(obst, fontsize=12, inline=1, fmt='obstacle')
+      # axes[axes_idx[0],axes_idx[1]].clabel(obst, fontsize=8, inline=1, fmt='obstacle')
         
     for traj in trajs:
       # assumes that (0,0) will always be x_g vs x_o
@@ -424,38 +422,53 @@ class Pickup1DEnv(gym.Env):
     plt.savefig(save_plot_name)
     plt.close()
   
+    
   def plot_env(self, save_dir=''):
     save_plot_name = os.path.join(save_dir, f'target_and_obstacle_set_Pickup1DEnv.png')
 
     fig, axes = plt.subplots(3, figsize=(12, 12))
 
-    max_V = np.max(np.abs(self.target_T))
+    _slice = [0., 0.]
+
+    xgdot_idx = np.rint(
+        (_slice[0] - np.min(self.grid_x[...,1]))/(np.max(self.grid_x[...,1])-np.min(self.grid_x[...,1])) * (self.target_T.shape[1]-1)
+    ).astype(int)
+
+    xodot_idx = np.rint(
+        (_slice[1] - np.min(self.grid_x[...,3]))/(np.max(self.grid_x[...,3])-np.min(self.grid_x[...,3])) * (self.target_T.shape[3]-1)
+    ).astype(int)
+
+    grid = self.grid_x[:,xgdot_idx,:,xodot_idx,:]
+    target = self.target_T[:,xgdot_idx,:,xodot_idx]
+    obstacle = self.obstacle_T[:,xgdot_idx,:,xodot_idx]
+
+    max_V = np.max(np.abs(target))
     levels=np.arange(-max_V, max_V, 0.01)
     levels=np.linspace(-max_V, max_V, 11) if len(levels) < 11 else levels
         
-    ctr_t = axes[0].contourf(self.grid_x[...,0], self.grid_x[...,1], self.target_T, levels=levels, cmap='seismic')
-    targ = axes[0].contour(self.grid_x[...,0], self.grid_x[...,1], self.target_T, levels=[0], colors='black')
+    ctr_t = axes[0].contourf(grid[...,0], grid[...,2], target, levels=levels, cmap='seismic')
+    targ = axes[0].contour(grid[...,0], grid[...,2], target, levels=[0], colors='black')
     axes[0].set_title(f'Target set l(x)')
     axes[0].set_xlabel('X')
     axes[0].set_xlabel('X dot')
     axes[0].clabel(targ, fontsize=12, inline=1, fmt='target')
     fig.colorbar(ctr_t, ax=axes[0])
 
-    max_V = np.max(np.abs(self.obstacle_T))
-    levels=np.arange(-max_V, max_V, 0.01)
-    levels=np.linspace(-max_V, max_V, 11) if len(levels) < 11 else levels
-    ctr_o = axes[1].contourf(self.grid_x[...,0], self.grid_x[...,1], self.obstacle_T, levels=levels, cmap='seismic')
-    obst = axes[1].contour(self.grid_x[...,0], self.grid_x[...,1], self.obstacle_T, levels=[0], colors='black')
-    axes[1].set_title(f'Obstacle set g(x)')
-    axes[1].set_xlabel('X')
-    axes[1].set_xlabel('X dot')
+    # max_V = np.max(np.abs(obstacle))
+    # levels=np.arange(-max_V, max_V, 0.01)
+    # levels=np.linspace(-max_V, max_V, 11) if len(levels) < 11 else levels
+    # ctr_o = axes[1].contourf(grid[...,0], grid[...,1], obstacle, levels=levels, cmap='seismic')
+    # obst = axes[1].contour(grid[...,0], grid[...,1], obstacle, levels=[0], colors='black')
+    # axes[1].set_title(f'Obstacle set g(x)')
+    # axes[1].set_xlabel('X')
+    # axes[1].set_xlabel('X dot')
     # axes[1].clabel(obst, fontsize=12, inline=1, fmt='obstacle')
-    fig.colorbar(ctr_o, ax=axes[1])
+    # fig.colorbar(ctr_o, ax=axes[1])
 
-    ra = np.maximum(self.obstacle_T, self.target_T)
+    ra = np.maximum(self.obstacle_T, self.target_T)[:,xgdot_idx,:,xodot_idx]
 
-    ctr_ra = axes[2].contourf(self.grid_x[...,0], self.grid_x[...,1], ra, levels=np.arange(-2, 2, 0.1), cmap='seismic')
-    axes[2].contour(self.grid_x[...,0], self.grid_x[...,1], ra, levels=[0], colors='black')
+    ctr_ra = axes[2].contourf(grid[...,0], grid[...,2], ra, levels=np.arange(-2, 2, 0.1), cmap='seismic')
+    axes[2].contour(grid[...,0], grid[...,2], ra, levels=[0], colors='black')
     axes[2].set_title(f'Terminal Value fn')
     axes[2].set_xlabel('X')
     axes[2].set_xlabel('X dot')
@@ -465,7 +478,7 @@ class Pickup1DEnv(gym.Env):
     plt.close()
   
   def get_GT_value_fn(self):
-    outputs = np.load("/home/saumyas/Projects/safe_control/HJR_manip/outputs/Pickup1D/pick_object/value_fn_Pickup1D_pick_object_grid_61_61_dt_0.05_T_10.0.npz")
+    outputs = np.load("") # TODO(saumya)
 
     value_fn = outputs['value_fn']
     min_u_idx = outputs['min_u_idx']

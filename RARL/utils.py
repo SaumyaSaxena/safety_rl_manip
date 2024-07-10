@@ -81,14 +81,14 @@ def load_obj(filename):
     return pickle.load(f)
 
 def calc_false_pos_neg_rate(pred_v, GT_v):
-  pred_success = pred_v < 0.
+  pred_success = pred_v > 0.
   GT_success = GT_v < 0.
 
-  FP = np.sum((GT_success == False) and (pred_success == True))
-  FN = np.sum((GT_success == True) and (pred_success == False))
+  FP = np.sum(np.logical_and((GT_success == False), (pred_success == True)))
+  FN = np.sum(np.logical_and((GT_success == True), (pred_success == False)))
 
-  TP = np.sum((GT_success == True) and (pred_success == True))
-  TN = np.sum((GT_success == False) and (pred_success == False))
+  TP = np.sum(np.logical_and((GT_success == True), (pred_success == True)))
+  TN = np.sum(np.logical_and((GT_success == False), (pred_success == False)))
 
   false_pos_rate = FP/(FP+TN)
   false_neg_rate = FN/(FN+TP)
