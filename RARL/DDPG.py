@@ -10,7 +10,7 @@ from . import DDPG_core
 import wandb
 import random
 from tqdm import trange
-from .utils import calc_false_pos_neg_rate
+from .utils import calc_false_pos_neg_rate, TopKLogger
 from RARL.datasets import *
 
 class ReplayBuffer:
@@ -186,9 +186,11 @@ class DDPG(torch.nn.Module):
         self.act_limit = self.env.action_space.high[0]
 
         # Create actor-critic module and target networks
-        self.ac = DDPG_core.MLPActorCritic(self.env.observation_space, 
+        self.ac = DDPG_core.MLPActorCritic(
+            self.env.observation_space, 
             self.env.action_space, 
-            **train_cfg.ac_kwargs).to(self.device)
+            **train_cfg.ac_kwargs
+        ).to(self.device)
         self.ac_targ = deepcopy(self.ac).to(self.device)
 
         # Freeze target networks with respect to optimizers (only update via polyak averaging)
@@ -206,6 +208,8 @@ class DDPG(torch.nn.Module):
 
         self.modelFolder = os.path.join(outFolder, "model")
         os.makedirs(self.modelFolder, exist_ok=True)
+
+        self.topk_logger = TopKLogger(train_cfg.save_top_k)
 
     def set_seed(self, seed):
         self.seed_val = seed
@@ -541,6 +545,8 @@ class DDPG(torch.nn.Module):
             # torch.cuda.empty_cache()
             if not self.debug:
                 log_dict = {}
+                wandb.run.summary["FPR"] = 20.
+                wandb.run.summary["FNR"] = 30. #todo removepls
             
             # Until start_steps have elapsed, randomly sample actions
             # from a uniform distribution for better exploration. Afterwards, 
@@ -597,33 +603,33 @@ class DDPG(torch.nn.Module):
                 # Save model
                 if (epoch % self.model_save_freq == 0) or (epoch == self.epochs):
                     print(f"Saving model at epoch: {epoch}")
-                    save_file_name = os.path.join(self.modelFolder, f"step_{t}_test_return_{avg_test_return:.2f}.pth")
+                    status = self.topk_logger.push(save_file_name, avg_test_return)
+                    if status:
+                        save_file_name = os.path.join(self.modelFolder, f"step_{t}_test_return_{avg_test_return:.2f}.pth")
+                        torch.save(
+                            obj={
+                                "state_dict": self.state_dict(),
+                                "env_name": self.env_name,
+                                "train_cfg": self.train_cfg,
+                                "env_cfg": self.env_cfg,
+                                "pi_optimizer_state": self.pi_optimizer.state_dict(),
+                                "q_optimizer_state": self.q_optimizer.state_dict(),
+                                "epoch": epoch,
+                            },
+                            f=save_file_name,
+                        )
+                        if not self.debug:
+                            wandb.save(save_file_name, base_path=os.path.join(self.modelFolder, '..'))
 
-                    torch.save(
-                        obj={
-                            "state_dict": self.state_dict(),
-                            "env_name": self.env_name,
-                            "train_cfg": self.train_cfg,
-                            "env_cfg": self.env_cfg,
-                            "pi_optimizer_state": self.pi_optimizer.state_dict(),
-                            "q_optimizer_state": self.q_optimizer.state_dict(),
-                            "epoch": epoch,
-                        },
-                        f=save_file_name,
-                    )
                     if not self.debug:
-                        wandb.save(save_file_name, base_path=os.path.join(self.modelFolder, '..'))
-
-                if not self.debug:
-                    log_dict.update({f'Epoch': epoch})
-                    log_dict.update({f'Avg Test Return': avg_test_return})
-                    log_dict.update({f'Avg Test Episode len': avg_test_ep_len})
-                    log_dict.update({f'Time': time.time()-start_time})
+                        log_dict.update({f'Epoch': epoch})
+                        log_dict.update({f'Avg Test Return': avg_test_return})
+                        log_dict.update({f'Avg Test Episode len': avg_test_ep_len})
+                        log_dict.update({f'Time': time.time()-start_time})
 
             if not self.debug:
                 wandb.log(log_dict, step=t)
-            
-        self.eval()
+        self.eval(debug=False) # uploading stuff to wandb
     
     def get_value_fn(self):
         # v = torch.zeros(self.test_env.grid_x_flat.shape[:-1]).to(self.device)
@@ -634,7 +640,7 @@ class DDPG(torch.nn.Module):
             v = v.reshape(*self.test_env.grid_x.shape[:-1])
         return v
 
-    def eval(self, ckpt=None):
+    def eval(self, ckpt=None, debug=True):
         if ckpt is not None:
             self.load_state_dict(ckpt["state_dict"])
         GT_value_fn, GT_grid_x, GT_target_T, GT_obstacle_T = self.test_env.get_GT_value_fn()
@@ -659,6 +665,10 @@ class DDPG(torch.nn.Module):
 
         print(f"Saving FPR={false_pos_rate}; FNR={false_neg_rate} results to: {str(fname)}")
 
+        if not debug:
+            wandb.run.summary["FPR"] = false_pos_rate
+            wandb.run.summary["FNR"] = false_neg_rate
+
         trajs = []
         for init_s in self.test_env.visual_initial_states:
             rollout = []
@@ -678,7 +688,8 @@ class DDPG(torch.nn.Module):
             target_T=GT_target_T,
             obstacle_T=GT_obstacle_T,
             save_dir=self.figureFolder,
-            name=f'GT_value_fn_inf_horiron')
+            name=f'GT_value_fn_inf_horiron',
+            debug=debug)
         
         self.test_env.plot_value_fn(
             pred_value_fn,
@@ -687,6 +698,7 @@ class DDPG(torch.nn.Module):
             obstacle_T=GT_obstacle_T,
             trajs=trajs,
             save_dir=self.figureFolder,
-            name=f'Pred_value_fn_inf_horizon')
+            name=f'Pred_value_fn_inf_horizon',
+            debug=debug)
 
         print(f"Saving predicted and GT value fn plots to: {str(self.figureFolder)}")

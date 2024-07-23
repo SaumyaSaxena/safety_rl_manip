@@ -17,10 +17,6 @@ wandb:
   group: drabe
   project: safety_rl_manip
   name: ${train.run_name}
-  saver:
-    upload: True
-    save_top_k: 5
-    save_freq: 10
 wandb_resume_id: null
 
 env_name: "pickup1D_env-v0"
@@ -58,5 +54,6 @@ train_cfg:
   max_ep_len: 200
   model_save_freq: 2
   plot_save_freq: 10
+  save_top_k: 5
   ac_kwargs:
     hidden_sizes: [256,256]

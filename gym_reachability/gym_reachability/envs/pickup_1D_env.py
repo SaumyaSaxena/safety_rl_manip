@@ -14,7 +14,7 @@ import matplotlib.pyplot as plt
 import torch
 import random
 import os
-
+import wandb
 
 class Pickup1DEnv(gym.Env):
 
@@ -369,7 +369,17 @@ class Pickup1DEnv(gym.Env):
 
     return xy_samples, heuristic_v
 
-  def plot_value_fn(self, value_fn, grid_x, target_T=None, obstacle_T=None, trajs=[], save_dir='', name=''):
+  def plot_value_fn(
+      self, 
+      value_fn, 
+      grid_x, 
+      target_T=None, 
+      obstacle_T=None, 
+      trajs=[], 
+      save_dir='', 
+      name='',
+      debug=True,
+    ):
     _state_names = ['x_g', 'x_g_dot', 'x_o', 'x_o_dot']
 
     _plot_state = [
@@ -450,6 +460,8 @@ class Pickup1DEnv(gym.Env):
 
     plt.savefig(save_plot_name)
     plt.close()
+    if not debug:
+      wandb.log({f"{save_plot_name}": wandb.Image(save_plot_name)})
     
   def plot_env(self, save_dir=''):
     value_fn = np.maximum(self.obstacle_T, self.target_T)

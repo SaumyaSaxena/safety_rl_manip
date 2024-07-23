@@ -1,5 +1,5 @@
 tag: ${now:%Y-%m-%d-%H-%M-%S}
-debug: True
+debug: True # TODO: always true since we are not using wandb during eval
 
 eval_cfg:
   gpu: 0

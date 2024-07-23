@@ -5,6 +5,7 @@ import matplotlib.pyplot as plt
 import torch
 import random
 import os
+import wandb
 from .utils import signed_dist_fn_rectangle, create_grid
 
 class PointMass1DContEnv(gym.Env):
@@ -294,7 +295,17 @@ class PointMass1DContEnv(gym.Env):
 
     return xy_samples, heuristic_v
 
-  def plot_value_fn(self, value_fn, grid_x, target_T=None, obstacle_T=None, trajs=[], save_dir='', name=''):
+  def plot_value_fn(
+      self, 
+      value_fn, 
+      grid_x, 
+      target_T=None, 
+      obstacle_T=None, 
+      trajs=[], 
+      save_dir='', 
+      name='',
+      debug=True
+    ):
       
     save_plot_name = os.path.join(save_dir, f'Value_fn_{name}.png')
     # Plot contour plot
@@ -323,6 +334,8 @@ class PointMass1DContEnv(gym.Env):
 
     plt.savefig(save_plot_name)
     plt.close()
+    if not debug:
+      wandb.log({f"{save_plot_name}": wandb.Image(save_plot_name)})
 
   def plot_env(self, save_dir=''):
       
