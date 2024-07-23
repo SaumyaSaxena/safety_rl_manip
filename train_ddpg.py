@@ -14,8 +14,8 @@ from gym_reachability import gym_reachability  # register Custom Gym envs.
 
 logger = logging.getLogger(__name__)
 
-@hydra.main(config_path='cfg/', config_name='train/train_pickup1D_ddpg.yaml')
-# @hydra.main(config_path='cfg/', config_name='train/train_point_mass_cont_ddpg.yaml')
+# @hydra.main(config_path='cfg/', config_name='train/train_pickup1D_ddpg.yaml')
+@hydra.main(config_path='cfg/', config_name='train/train_point_mass_cont_ddpg.yaml')
 def main(cfg):
     hydra_dir = Path(os.getcwd())
     cfg = cfg.train
@@ -44,7 +44,11 @@ def main(cfg):
         outFolder=hydra_dir, debug=cfg.debug
     )
 
-    agent.learn()
+    step=0
+    if train_cfg.warmupQ:
+        step = agent.initQ()
+    
+    agent.learn(step)
 
 if __name__ == "__main__":
     main()

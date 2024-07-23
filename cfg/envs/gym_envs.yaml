@@ -14,19 +14,19 @@ dubins_car-v1:
 pickup1D_env-v0:
   task: 'pick_object' # gripper_to_goal, reach_object, pick_object, object_to_goal, slow_pick
   T: 10.0
-  dt: 0.05
+  dt: 0.1
   gripper_mass: 1.
   object_mass: 1.
   thresh: 0.1
   state_ranges: 
-    low: [-1., -6., -1., -6.] # x_g, xdot_g, x_o, xdot_o
-    high: [1., 6., 1., 6.]
-  control_low: [-40.]
-  control_high: [40.]
-  N_x: [61, 31, 61, 31]  # Number of grid points per state dimension
+    low: [-0.5, -2., -0.5, -2.] # x_g, xdot_g, x_o, xdot_o
+    high: [0.5, 2., 0.5, 2.]
+  control_low: [-10.]
+  control_high: [10.]
+  N_x: [61, 21, 61, 21]  # Number of grid points per state dimension
   N_u: [21] # Number of grid points per control dimension
-  initial_state: [-0.5, 2., 0.0, 0.]
-  goal: [0.5, 0]
+  initial_state: [-0.2, 0.0, 0.2, 0.]
+  goal: [0.0, 0.0]
   adjacency_calc_mode: 'nearest_grid_pt' # min_dist, nearest_grid_pt
   penalty: 10.
   reward: -10.

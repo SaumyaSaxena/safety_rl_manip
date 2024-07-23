@@ -1,8 +1,8 @@
 debug: False
-gpu: 0
+gpu: 2
 seed: 0
 tag: ${now:%Y-%m-%d-%H-%M-%S}
-run_name: "train_pickup1D_pick_object_DDPG_RL_${train.train_cfg.mode}" 
+run_name: "train_pickup1D_pick_object_DDPG_RL_return_${train.train_cfg.mode}" 
 
 hydra:
   run:
@@ -32,7 +32,15 @@ envs:
     costType: 'max_ell_g'
 
 train_cfg:
-  mode: 'lagrange' # RA, lagrange
+  warmupQ: False
+  warmup_cfg: 
+    warmup_type: 'terminal_all_states' # 'terminal_all_states', 'only_terminal_states', 'mixed_terminal_expert'
+    num_terminal_samples: 1e+4
+    num_mixed_terminal_samples: 1e+4
+    expert_data_loc: '' 
+    batch_size: 200
+    num_epochs: 500
+  mode: 'RA' # RA, lagrange
   seed: ${train.seed}
   steps_per_epoch: 4000
   epochs: 200
@@ -46,8 +54,9 @@ train_cfg:
   update_after: 1000
   update_every: 50
   act_noise: 0.1
-  num_test_episodes: 10
+  num_test_episodes: 20
   max_ep_len: 200
-  save_freq: 2
+  model_save_freq: 2
+  plot_save_freq: 10
   ac_kwargs:
     hidden_sizes: [256,256]

@@ -4,5 +4,5 @@ debug: True
 eval_cfg:
   gpu: 0
   wandb_load:
-    run_path: 'iam-lab/safety_rl_manip/v0io0fyc'
-    file: model/step_799999_test_return_4.00.pth
+    run_path: 'iam-lab/safety_rl_manip/yxw2qyca'
+    file: model/step_791999_test_return_2.01.pth

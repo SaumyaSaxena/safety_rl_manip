@@ -28,15 +28,19 @@ class PointMass1DContEnv(gym.Env):
 
     self.low = self.bounds[:, 0]
     self.high = self.bounds[:, 1]
+    self.u_min = np.array(cfg.control_low)
+    self.u_max = np.array(cfg.control_high)
+
     self.device = device
 
     # Set random seed.
     self.set_costParam()
 
+    wall_pixels = 2
+    self.wall_thickness = (self.high[0]-self.low[0])/self.N_x[0]*wall_pixels
+
     self.grid_x = create_grid(self.low, self.high, self.N_x)
     self.grid_x_flat = torch.from_numpy(self.grid_x.reshape(-1, self.grid_x.shape[-1])).float().to(self.device)
-    
-
     self.target_T = self.target_margin(self.grid_x)
     self.obstacle_T = self.safety_margin(self.grid_x)
     
@@ -44,7 +48,7 @@ class PointMass1DContEnv(gym.Env):
     self.time_step = cfg.dt
 
     # Gym variables.
-    self.action_space = gym.spaces.Box(np.array(cfg.control_low), np.array(cfg.control_high))
+    self.action_space = gym.spaces.Box(self.u_min, self.u_max)
     self.midpoint = (self.low + self.high) / 2.0
     self.interval = self.high - self.low
     self.observation_space = gym.spaces.Box(
@@ -55,6 +59,8 @@ class PointMass1DContEnv(gym.Env):
 
     self.state = np.zeros(self.n)
     self.doneType = cfg.doneType
+
+    
 
     # Visualization Parameters
     self.visual_initial_states = [
@@ -121,7 +127,17 @@ class PointMass1DContEnv(gym.Env):
       elif success:
         cost = self.reward
       else:
-        cost = 0.
+        # cost = 0.
+        if self.costType == 'dense_ell':
+          cost = l_x
+        elif self.costType == 'dense':
+          cost = l_x + g_x
+        elif self.costType == 'sparse':
+          cost = 0. * self.scaling
+        elif self.costType == 'max_ell_g':
+          cost = max(l_x, g_x)
+        else:
+          raise ValueError("invalid cost type!")
     else:
       if fail:
         cost = self.penalty
@@ -209,14 +225,22 @@ class PointMass1DContEnv(gym.Env):
       float: postive numbers indicate being inside the failure set (safety
           violation).
     """
-    gx = signed_dist_fn_rectangle(
+    obstacle = signed_dist_fn_rectangle(
       s,
       np.array(self.env_cfg.obstacle_set.low), 
       np.array(self.env_cfg.obstacle_set.high), 
       obstacle=True)
-    return self.scaling * gx
-  
 
+    boundary = self.find_boundary_value_fn(s)
+
+    return self.scaling * np.maximum(obstacle, boundary)
+  
+  def find_boundary_value_fn(self, s):
+    # s: shape (batch, n)
+    wall_left = self.low[0] - s[...,0] + self.wall_thickness
+    wall_right = s[...,0] - self.high[0] + self.wall_thickness
+    return np.maximum(wall_left, wall_right)
+  
   def target_margin(self, s):
     """Computes the margin (e.g. distance) between the state and the target set.
 
@@ -343,7 +367,7 @@ class PointMass1DContEnv(gym.Env):
     plt.close()
 
   def get_GT_value_fn(self):
-    outputs = np.load("/home/saumyas/Projects/safe_control/HJR_manip/.outputs/DoubleIntegrator/goto_goal_inf_horizon/value_fn_inf_horizon_DoubleIntegrator_goto_goal_grid_Nx_101_101_Nu_51_dt_0.05_T_5.00.npz")
+    outputs = np.load("/home/saumyas/Projects/safe_control/HJR_manip/outputs/DoubleIntegrator/goto_goal_inf_horizon/value_fn_inf_horizon_DoubleIntegrator_goto_goal_grid_Nx_101_101_Nu_51_dt_0.05_T_5.00.npz")
 
     value_fn = outputs['value_fn']
     min_u_idx = outputs['min_u_idx']

@@ -11,6 +11,7 @@ import wandb
 import random
 from tqdm import trange
 from .utils import calc_false_pos_neg_rate
+from RARL.datasets import *
 
 class ReplayBuffer:
     """
@@ -161,7 +162,10 @@ class DDPG(torch.nn.Module):
         self.act_noise = train_cfg.act_noise
         self.num_test_episodes = train_cfg.num_test_episodes
         self.max_ep_len = train_cfg.max_ep_len
-        self.save_freq = train_cfg.save_freq
+        self.model_save_freq = train_cfg.model_save_freq
+        self.plot_save_freq = train_cfg.plot_save_freq
+        self.warmupQ = train_cfg.warmupQ
+        self.warmup_cfg = train_cfg.warmup_cfg
         
         self.outFolder = outFolder
         self.debug = debug
@@ -198,6 +202,8 @@ class DDPG(torch.nn.Module):
         self.pi_optimizer = Adam(self.ac.pi.parameters(), lr=self.pi_lr)
         self.q_optimizer = Adam(self.ac.q.parameters(), lr=self.q_lr)
 
+        self.MSELoss = torch.nn.MSELoss()
+
         self.modelFolder = os.path.join(outFolder, "model")
         os.makedirs(self.modelFolder, exist_ok=True)
 
@@ -210,6 +216,193 @@ class DDPG(torch.nn.Module):
         random.seed(self.seed_val)
         torch.backends.cudnn.benchmark = False
         torch.backends.cudnn.deterministic = True
+
+    def create_dataloader(self):
+        if self.warmup_cfg.warmup_type == 'warmupQ_terminal_all_states':
+            dataset =  AnalyticalTerminalDataset(
+                self.test_env, self.warmup_cfg.warmupQ_terminal_all_states.num_terminal_samples)
+        elif self.warmup_cfg.warmup_type == 'warmup_pi':
+            dataset =  AnalyticalExpertDataset(
+                self.test_env, filename=self.warmup_cfg.warmup_pi.expert_data_loc)
+        elif self.warmup_cfg.warmup_type == 'warmupQ_expert':
+            dataset =  AnalyticalMixedDataset(
+                self.test_env, 
+                filename=self.warmup_cfg.warmupQ_expert.expert_data_loc, 
+                num_terminal_samples=self.warmup_cfg.warmupQ_expert.num_mixed_terminal_samples)
+        else:
+            raise NotImplementedError('Dataset type not implemented.')
+
+        self.dataloader = torch.utils.data.DataLoader(
+            dataset,
+            batch_size=self.warmup_cfg.batch_size,
+            shuffle=True,
+            pin_memory=True,
+            drop_last=True,
+            num_workers=8,
+        )
+    
+    def warmupQ_terminal_update(self, batch):
+        for p in self.ac.pi.parameters():
+            p.requires_grad = False
+        Vx = self.ac.q(batch['xt'], batch['ut'])
+        loss = self.MSELoss(Vx, torch.min(batch['lx'], batch['gx']).flatten())
+
+        loss.backward()
+        self.warmup_q_optimizer.step()
+        for p in self.ac.pi.parameters():
+            p.requires_grad = True
+        loss_info = {'warmupQ_terminal_q_loss': loss.item()}
+        return loss_info
+
+    def warmupQ_expert_update(self, batch):
+        for p in self.ac.pi.parameters():
+            p.requires_grad = False
+        
+        q = self.ac.q(batch['xt'], batch['ut'])
+        q_pi_targ = self.ac_targ.q(batch['xtp1'], batch['utp1'])
+        
+        r , done, lx, gx = batch['rt'].flatten(), batch['done'].flatten(), batch['lx'].flatten(), batch['gx'].flatten()
+        # WarmupQ
+        if self.mode == 'lagrange':
+            backup = r + self.gamma * (1 - done) * q_pi_targ
+        elif self.mode == 'RA':
+            V_non_terminal = torch.min(
+                gx,
+                torch.max(lx, q_pi_targ),
+            )
+            terminal = done * r
+            non_terminal = (1 - done) * (r*(1 - self.gamma) + V_non_terminal * self.gamma)
+            backup = terminal + non_terminal
+        else:
+            raise NotImplementedError("Mode not implemented.")
+        
+        # loss = ((q - backup)**2).mean()
+        loss = self.MSELoss(q, backup)
+        loss.backward()
+        self.warmup_q_optimizer.step()
+        loss_info = {'warmupQ_expert_q_loss': loss.item()}
+        
+        # Warmup pi
+        if self.warmup_cfg.warmupQ_expert.update_pi:
+            # Freeze q, unfreeze pi
+            for p in self.ac.pi.parameters():
+                p.requires_grad = True
+            for p in self.ac.q.parameters():
+                p.requires_grad = False
+
+            loss_pi = self.warmup_pi_loss(batch, update_type=self.warmup_cfg.warmupQ_expert.update_pi_type)
+            loss_pi.backward()
+            self.warmup_pi_optimizer.step()
+            loss_info.update({f'warmupQ_expert_pi_loss': loss_pi.item()})
+
+            for p in self.ac.q.parameters():
+                p.requires_grad = True
+        
+        return loss_info
+
+    def warmup_pi_loss(self, batch, update_type='expert'):
+        if update_type == 'expert':
+            # loss = torch.norm(batch['ut'], self.ac.pi(batch['xt']))
+            loss = self.MSELoss(self.ac.pi(batch['xt']), batch['ut'])
+        elif update_type == 'maxQ':
+            q_pi = self.ac.q(batch['xt'], self.ac.pi(batch['xt']))
+            loss = -q_pi.mean()
+        else:
+            raise NotImplementedError('Pi update type not implemented.')
+        return loss
+
+    def warmup_pi_update(self, batch):
+        for p in self.ac.pi.parameters():
+            p.requires_grad = True
+        for p in self.ac.q.parameters():
+            p.requires_grad = False
+
+        loss_pi = self.warmup_pi_loss(batch, update_type='expert')
+        loss_pi.backward()
+        self.warmup_pi_optimizer.step()
+        loss_info = {f'warmup_pi_loss': loss_pi.item()}
+
+        for p in self.ac.q.parameters():
+            p.requires_grad = True
+
+        return loss_info
+        
+    def warmup_update(self, epoch, step, batch):
+        self.warmup_q_optimizer.zero_grad()
+        self.warmup_pi_optimizer.zero_grad()
+
+        if self.warmup_cfg.warmup_type == 'warmupQ_terminal_all_states':
+            loss_info = self.warmupQ_terminal_update(batch)
+            
+        elif self.warmup_cfg.warmup_type == 'warmupQ_expert':
+            loss_info = self.warmupQ_expert_update(batch)
+
+        elif self.warmup_cfg.warmup_type == 'warmup_pi':
+            loss_info = self.warmup_pi_update(batch)
+        else:
+            raise NotImplementedError('Dataset type not implemented.')
+
+        # Finally, update target networks by polyak averaging.
+        with torch.no_grad():
+            for p, p_targ in zip(self.ac.parameters(), self.ac_targ.parameters()):
+                # NB: We use an in-place operations "mul_", "add_" to update target
+                # params, as opposed to "mul" and "add", which would make new tensors.
+                p_targ.data.mul_(self.polyak)
+                p_targ.data.add_((1 - self.polyak) * p.data)
+
+        if not self.debug: 
+            loss_info.update({f'warmup_epoch': epoch})
+            loss_info.update({'optim/warmup_q_lr': self.warmup_q_optimizer.param_groups[0]['lr']})
+            loss_info.update({'optim/warmup_pi_lr': self.warmup_pi_optimizer.param_groups[0]['lr']})
+            wandb.log(loss_info, step=step)
+    
+    def initQ(self):
+
+        self.warmup_q_optimizer = Adam(self.ac.q.parameters(), lr=self.warmup_cfg.warmup_q_lr)
+        self.warmup_pi_optimizer = Adam(self.ac.pi.parameters(), lr=self.warmup_cfg.warmup_pi_lr)
+
+        self.create_dataloader()
+        step = 0
+        for epoch in trange(self.warmup_cfg.num_epochs):
+            for batch_idx, batch in enumerate(self.dataloader):
+                for k, v in batch.items():
+                    batch[k] = v.to(self.device)
+                self.warmup_update(epoch, step, batch)
+                step += 1
+            if (epoch % self.plot_save_freq == 0):
+                # Plot value function
+                v = self.get_value_fn()
+                self.test_env.plot_value_fn(v.detach().cpu().numpy(),
+                    self.test_env.grid_x,
+                    target_T=self.test_env.target_T,
+                    obstacle_T=self.test_env.obstacle_T,
+                    save_dir=self.figureFolder, 
+                    name=f'warmup_epoch_{epoch}')
+                
+        print(f"Warmup: {self.warmup_cfg.warmup_type} complete.")
+        
+        return step
+    
+    def add_expert_to_buffer(self):
+        dataset =  AnalyticalExpertDataset(
+            self.test_env, filename=self.train_cfg.expert_data_loc)
+        expert_dataloader = torch.utils.data.DataLoader(
+            dataset,
+            batch_size=1,
+            shuffle=True,
+            pin_memory=True,
+            drop_last=True,
+            num_workers=8,
+        )
+        print("Adding expert demonstrations to buffer")
+        for batch_idx, batch in enumerate(expert_dataloader):
+            o, a, r = batch['xt'].flatten(), batch['ut'].flatten(), batch['rt'].flatten()
+            o2, d = batch['xtp1'].flatten(), batch['done'].flatten()
+            lx, gx  = batch['lx'].flatten(), batch['gx'].flatten()
+            d = d > 0.  # bool
+            self.replay_buffer.store(o, a, r, o2, d, lx, gx)
+        
+        print("DONE Adding expert demonstrations to buffer")
 
     # Set up function for computing DDPG Q-loss
     def compute_loss_q(self, data):
@@ -319,28 +512,33 @@ class DDPG(torch.nn.Module):
                 ep_len += 1
             trajs.append(np.array(rollout))
 
-        # Plot value function
-        v = self.get_value_fn()
-        self.test_env.plot_value_fn(v.detach().cpu().numpy(),
-            self.test_env.grid_x,
-            target_T=self.test_env.target_T,
-            obstacle_T=self.test_env.obstacle_T,
-            trajs=trajs, 
-            save_dir=self.figureFolder, 
-            name=f'epoch_{epoch}')
+        if (epoch % self.plot_save_freq == 0):
+            # Plot value function
+            v = self.get_value_fn()
+            self.test_env.plot_value_fn(v.detach().cpu().numpy(),
+                self.test_env.grid_x,
+                target_T=self.test_env.target_T,
+                obstacle_T=self.test_env.obstacle_T,
+                trajs=trajs, 
+                save_dir=self.figureFolder, 
+                name=f'epoch_{epoch}')
 
         return avg_test_return, avg_test_ep_len
 
-    def learn(self):
+
+    def learn(self, start_step=0):
+        if self.train_cfg.add_expert_to_buffer:
+            self.add_expert_to_buffer()
+
         # Prepare for interaction with environment
-        total_steps = self.steps_per_epoch * self.epochs
+        total_steps = self.steps_per_epoch * self.epochs + start_step
         start_time = time.time()
         o, ep_ret, ep_len = self.env.reset(), 0, 0
         ep_num = 0
 
         # Main loop: collect experience in env and update/log each epoch
-        for t in trange(total_steps):
-            torch.cuda.empty_cache()
+        for t in trange(start_step, total_steps):
+            # torch.cuda.empty_cache()
             if not self.debug:
                 log_dict = {}
             
@@ -397,7 +595,7 @@ class DDPG(torch.nn.Module):
                 avg_test_return, avg_test_ep_len = self.test_agent(epoch)
                 
                 # Save model
-                if (epoch % self.save_freq == 0) or (epoch == self.epochs):
+                if (epoch % self.model_save_freq == 0) or (epoch == self.epochs):
                     print(f"Saving model at epoch: {epoch}")
                     save_file_name = os.path.join(self.modelFolder, f"step_{t}_test_return_{avg_test_return:.2f}.pth")
 
@@ -424,18 +622,21 @@ class DDPG(torch.nn.Module):
 
             if not self.debug:
                 wandb.log(log_dict, step=t)
+            
+        self.eval()
     
     def get_value_fn(self):
         # v = torch.zeros(self.test_env.grid_x_flat.shape[:-1]).to(self.device)
-
-        v = self.ac_targ.q(
-            self.test_env.grid_x_flat, 
-            self.ac_targ.pi(self.test_env.grid_x_flat))
-        v = v.reshape(*self.test_env.grid_x.shape[:-1])
+        with torch.no_grad():
+            v = self.ac_targ.q(
+                self.test_env.grid_x_flat, 
+                self.ac_targ.pi(self.test_env.grid_x_flat))
+            v = v.reshape(*self.test_env.grid_x.shape[:-1])
         return v
 
-    def eval(self, ckpt):
-        self.load_state_dict(ckpt["state_dict"])
+    def eval(self, ckpt=None):
+        if ckpt is not None:
+            self.load_state_dict(ckpt["state_dict"])
         GT_value_fn, GT_grid_x, GT_target_T, GT_obstacle_T = self.test_env.get_GT_value_fn()
         GT_value_fn_flat = GT_value_fn.flatten()
         GT_grid_flat = torch.from_numpy(GT_grid_x.reshape(-1, GT_grid_x.shape[-1])).float().to(self.device)
@@ -457,6 +658,18 @@ class DDPG(torch.nn.Module):
             json.dump(results, f, indent=4)
 
         print(f"Saving FPR={false_pos_rate}; FNR={false_neg_rate} results to: {str(fname)}")
+
+        trajs = []
+        for init_s in self.test_env.visual_initial_states:
+            rollout = []
+            o, d, ep_ret, ep_len = self.test_env.reset(init_s), False, 0, 0
+            rollout.append(o)
+            while not(d or (ep_len == self.max_ep_len)):
+                # Take deterministic actions at test time (noise_scale=0)
+                o, r, d, _ = self.test_env.step(self.get_action(o, 0))
+                rollout.append(o)
+                ep_len += 1
+            trajs.append(np.array(rollout))
         
         #Plotting value functions
         self.test_env.plot_value_fn(
@@ -472,6 +685,7 @@ class DDPG(torch.nn.Module):
             GT_grid_x,
             target_T=GT_target_T,
             obstacle_T=GT_obstacle_T,
+            trajs=trajs,
             save_dir=self.figureFolder,
             name=f'Pred_value_fn_inf_horizon')
 

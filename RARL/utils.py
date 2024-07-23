@@ -82,7 +82,7 @@ def load_obj(filename):
 
 def calc_false_pos_neg_rate(pred_v, GT_v):
   pred_success = pred_v > 0.
-  GT_success = GT_v < 0.
+  GT_success = GT_v < 0. # env considers V(x)<0 as success
 
   FP = np.sum(np.logical_and((GT_success == False), (pred_success == True)))
   FN = np.sum(np.logical_and((GT_success == True), (pred_success == False)))

@@ -36,10 +36,16 @@ class Pickup1DEnv(gym.Env):
 
     self.low = self.bounds[:, 0]
     self.high = self.bounds[:, 1]
+    self.u_min = np.array(cfg.control_low)
+    self.u_max = np.array(cfg.control_high)
+
     self.sample_inside_obs = cfg.sample_inside_obs
     self.device = device
 
     self.set_costParam()
+
+    wall_pixels = 2
+    self.wall_thickness = (self.high[0]-self.low[0])/self.N_x[0]*wall_pixels
 
     X = [np.linspace(self.low[i], self.high[i], self.N_x[i]) for i in range(4)]
     self.grid_x = np.stack(np.meshgrid(*X, indexing='ij'), axis=-1)
@@ -51,7 +57,7 @@ class Pickup1DEnv(gym.Env):
     self.time_step = cfg.dt
 
     # Gym variables.
-    self.action_space = gym.spaces.Box(np.array(cfg.control_low), np.array(cfg.control_high))
+    self.action_space = gym.spaces.Box(self.u_min, self.u_max)
     self.midpoint = (self.low + self.high) / 2.0
     self.interval = self.high - self.low
     self.observation_space = gym.spaces.Box(
@@ -68,11 +74,12 @@ class Pickup1DEnv(gym.Env):
     elif self.doneType == 'TF' or self.doneType == 'fail':
         self.sample_inside_obs = False
     
+    
 
     # Visualization Parameters
     self.visual_initial_states = [
-      np.array([-0.5, 0., 0., 0.]),
-      np.array([0.5, 0., 0., 0.]),
+      np.array([-0.1, 0., 0.1, 0.]),
+      np.array([0.1, 0., -0.1, 0.]),
     ]
     
     # Define dynamics parameters
@@ -177,6 +184,16 @@ class Pickup1DEnv(gym.Env):
         cost = self.reward
       else:
         cost = 0.
+        if self.costType == 'dense_ell':
+          cost = l_x
+        elif self.costType == 'dense':
+          cost = l_x + g_x
+        elif self.costType == 'sparse':
+          cost = 0. * self.scaling
+        elif self.costType == 'max_ell_g':
+          cost = max(l_x, g_x)
+        else:
+          raise ValueError("invalid cost type!")
     else:
       if fail:
         cost = self.penalty
@@ -278,10 +295,22 @@ class Pickup1DEnv(gym.Env):
       float: postive numbers indicate being inside the failure set (safety
           violation).
     """
-    gx = -np.inf*np.ones(s.shape[:-1]) # g(x) > 0 is obstacle
-    return self.scaling * gx
+    obstacle = -np.inf*np.ones(s.shape[:-1]) # g(x) > 0 is obstacle
+    boundary = self.find_boundary_value_fn(s)
+    return self.scaling * np.maximum(obstacle, boundary)
   
+  def find_boundary_value_fn(self, s):
+    # s: shape (batch, n)
+    wall_left_g = self.low[0] - s[...,0] + self.wall_thickness
+    wall_right_g = s[...,0] - self.high[0] + self.wall_thickness
+    gripper_boundary = np.maximum(wall_left_g, wall_right_g)
 
+    wall_left_o = self.low[2] - s[...,2] + self.wall_thickness
+    wall_right_o = s[...,2] - self.high[2] + self.wall_thickness
+    object_boundary = np.maximum(wall_left_o, wall_right_o)
+    
+    return np.maximum(gripper_boundary, object_boundary)
+  
   def target_margin(self, s):
     """Computes the margin (e.g. distance) between the state and the target set.
 
@@ -353,9 +382,9 @@ class Pickup1DEnv(gym.Env):
     ]
     _slice_loc = [
         [None, 0.0, None, 0.], # velocities
-        [None, 1.0, None, 0.],
+        [None, 0.1, None, 0.],
         [0., None, 0., None],
-        [1., None, 0., None],
+        [0.1, None, 0., None],
         [None, None, 0., 0.0],
         [0.0, 0., None, None],
     ]
@@ -421,64 +450,19 @@ class Pickup1DEnv(gym.Env):
 
     plt.savefig(save_plot_name)
     plt.close()
-  
     
   def plot_env(self, save_dir=''):
-    save_plot_name = os.path.join(save_dir, f'target_and_obstacle_set_Pickup1DEnv.png')
+    value_fn = np.maximum(self.obstacle_T, self.target_T)
+    self.plot_value_fn(
+      value_fn,
+      self.grid_x, 
+      target_T=self.target_T, 
+      obstacle_T=self.obstacle_T,
+      save_dir=save_dir, name='target_and_obstacle_set_Pickup1DEnv'
+    )
 
-    fig, axes = plt.subplots(3, figsize=(12, 12))
-
-    _slice = [0., 0.]
-
-    xgdot_idx = np.rint(
-        (_slice[0] - np.min(self.grid_x[...,1]))/(np.max(self.grid_x[...,1])-np.min(self.grid_x[...,1])) * (self.target_T.shape[1]-1)
-    ).astype(int)
-
-    xodot_idx = np.rint(
-        (_slice[1] - np.min(self.grid_x[...,3]))/(np.max(self.grid_x[...,3])-np.min(self.grid_x[...,3])) * (self.target_T.shape[3]-1)
-    ).astype(int)
-
-    grid = self.grid_x[:,xgdot_idx,:,xodot_idx,:]
-    target = self.target_T[:,xgdot_idx,:,xodot_idx]
-    obstacle = self.obstacle_T[:,xgdot_idx,:,xodot_idx]
-
-    max_V = np.max(np.abs(target))
-    levels=np.arange(-max_V, max_V, 0.01)
-    levels=np.linspace(-max_V, max_V, 11) if len(levels) < 11 else levels
-        
-    ctr_t = axes[0].contourf(grid[...,0], grid[...,2], target, levels=levels, cmap='seismic')
-    targ = axes[0].contour(grid[...,0], grid[...,2], target, levels=[0], colors='black')
-    axes[0].set_title(f'Target set l(x)')
-    axes[0].set_xlabel('X')
-    axes[0].set_xlabel('X dot')
-    axes[0].clabel(targ, fontsize=12, inline=1, fmt='target')
-    fig.colorbar(ctr_t, ax=axes[0])
-
-    # max_V = np.max(np.abs(obstacle))
-    # levels=np.arange(-max_V, max_V, 0.01)
-    # levels=np.linspace(-max_V, max_V, 11) if len(levels) < 11 else levels
-    # ctr_o = axes[1].contourf(grid[...,0], grid[...,1], obstacle, levels=levels, cmap='seismic')
-    # obst = axes[1].contour(grid[...,0], grid[...,1], obstacle, levels=[0], colors='black')
-    # axes[1].set_title(f'Obstacle set g(x)')
-    # axes[1].set_xlabel('X')
-    # axes[1].set_xlabel('X dot')
-    # axes[1].clabel(obst, fontsize=12, inline=1, fmt='obstacle')
-    # fig.colorbar(ctr_o, ax=axes[1])
-
-    ra = np.maximum(self.obstacle_T, self.target_T)[:,xgdot_idx,:,xodot_idx]
-
-    ctr_ra = axes[2].contourf(grid[...,0], grid[...,2], ra, levels=np.arange(-2, 2, 0.1), cmap='seismic')
-    axes[2].contour(grid[...,0], grid[...,2], ra, levels=[0], colors='black')
-    axes[2].set_title(f'Terminal Value fn')
-    axes[2].set_xlabel('X')
-    axes[2].set_xlabel('X dot')
-    fig.colorbar(ctr_ra, ax=axes[2])
-
-    plt.savefig(save_plot_name)
-    plt.close()
-  
   def get_GT_value_fn(self):
-    outputs = np.load("") # TODO(saumya)
+    outputs = np.load("/home/saumyas/Projects/safe_control/HJR_manip/outputs/Pickup1D/pick_object_inf_horizon/value_fn_inf_horizon_Pickup1D_pick_object_grid_Nx_61_21_Nu_21_dt_0.1_T_2.70.npz")
 
     value_fn = outputs['value_fn']
     min_u_idx = outputs['min_u_idx']
@@ -489,4 +473,5 @@ class Pickup1DEnv(gym.Env):
     obstacle_T = outputs['obstacle_T']
     t_series = outputs['t_series']
 
+    return value_fn, grid_x, target_T, obstacle_T
     
