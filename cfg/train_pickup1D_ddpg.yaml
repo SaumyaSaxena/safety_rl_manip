@@ -28,7 +28,7 @@ envs:
     costType: 'max_ell_g'
 
 train_cfg:
-  warmupQ: False
+  warmup: False
   warmup_cfg: 
     warmup_type: 'terminal_all_states' # 'terminal_all_states', 'only_terminal_states', 'mixed_terminal_expert'
     num_terminal_samples: 1e+4

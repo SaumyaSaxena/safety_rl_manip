@@ -461,7 +461,7 @@ class Pickup1DEnv(gym.Env):
     plt.savefig(save_plot_name)
     plt.close()
     if not debug:
-      wandb.log({f"{save_plot_name}": wandb.Image(save_plot_name)})
+      wandb.log({f"Value_fn_{name}": wandb.Image(save_plot_name)})
     
   def plot_env(self, save_dir=''):
     value_fn = np.maximum(self.obstacle_T, self.target_T)

@@ -2,12 +2,17 @@ debug: False
 gpu: 1
 seed: 0
 tag: ${now:%Y-%m-%d-%H-%M-%S}
-run_name: "train_expert_in_buffer_1e6_point_mass_cont_DDPG_RL_${train.train_cfg.mode}" 
-# run_name: "train_${train.train_cfg.warmup_cfg.warmup_type})_point_mass_cont_DDPG_RL_${train.train_cfg.mode}" 
+# run_name: "train_expert_in_buffer_${train_cfg.expert_data_frac}_point_mass_cont_DDPG_RL_${train_cfg.mode}" 
+run_name: "train_gammaSch150_noiseSch_point_mass_cont_DDPG_RL_${train_cfg.mode}" 
+# run_name: "test" 
+# run_name: "train_${train_cfg.warmup_cfg.warmup_type}_UpdatePiType_${train_cfg.warmup_cfg.warmupQ_expert.update_pi_type}_point_mass_cont_DDPG_RL_${train_cfg.mode}" 
 
 hydra:
   run:
-    dir: outputs/${train.run_name}/${train.tag}
+    dir: outputs/train/${run_name}/${tag}
+  job:
+    chdir: True
+
 
 defaults:
   - /envs: gym_envs.yaml
@@ -17,7 +22,7 @@ wandb:
   entity: iam-lab
   group: drabe
   project: safety_rl_manip
-  name: ${train.run_name}
+  name: ${run_name}
 wandb_resume_id: null
 
 env_name: "point_mass_1D_cont_env-v0"
@@ -25,15 +30,15 @@ envs:
   point_mass_1D_cont_env-v0:
     doneType: 'all'
     return_type: 'reward'
-    mode: ${train.train_cfg.mode}
+    mode: ${train_cfg.mode}
     costType: 'max_ell_g'
 
 train_cfg:
-  warmupQ: False
+  warmup: False
   warmup_cfg:
     batch_size: 200
     num_epochs: 60
-    warmup_q_lr: 1e-5
+    warmup_q_lr: 1e-3
     warmup_pi_lr: 1e-3
     warmup_type: 'warmupQ_expert' # 'warmupQ_terminal_all_states', 'warmupQ_expert', 'warmup_pi'
     warmupQ_terminal_all_states:
@@ -42,25 +47,28 @@ train_cfg:
       num_mixed_terminal_samples: 1e+4
       expert_data_loc: '/home/saumyas/Projects/safe_control/HJR_manip/outputs/DoubleIntegrator/goto_goal_datasets/data_DoubleIntegrator_goto_goal_N_620.pkl'
       update_pi: True
-      update_pi_type: 'maxQ' # 'expert', 'maxQ'
+      update_pi_type: 'expert' # 'expert', 'maxQ'
     warmup_pi:
       expert_data_loc: '/home/saumyas/Projects/safe_control/HJR_manip/outputs/DoubleIntegrator/goto_goal_datasets/data_DoubleIntegrator_goto_goal_N_620.pkl'
-  add_expert_to_buffer: True
+  add_expert_to_buffer: False
   expert_data_loc: '/home/saumyas/Projects/safe_control/HJR_manip/outputs/DoubleIntegrator/goto_goal_datasets/data_DoubleIntegrator_goto_goal_N_620.pkl'
-  mode: 'lagrange' # RA, lagrange
-  seed: ${train.seed}
+  expert_data_frac: 0.75
+  mode: 'RA' # RA, lagrange
+  seed: ${seed}
   steps_per_epoch: 4000
   epochs: 200
   replay_size: 1e+6
   gamma: 0.99
+  gamma_warmup_epochs: 150
   polyak: 0.995
   pi_lr: 1e-3 
   q_lr: 1e-3
-  batch_size: 500
+  batch_size: 1000
   start_steps: 10000
   update_after: 1000
   update_every: 50
   act_noise: 0.1
+  noise_decay: 0.985
   num_test_episodes: 20
   max_ep_len: 200
   model_save_freq: 2

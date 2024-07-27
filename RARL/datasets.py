@@ -8,6 +8,7 @@ class AnalyticalExpertDataset(Dataset):
     def __init__(
             self, 
             env,
+            data_frac=1.,
             filename='', 
         ):
         self.n = env.n
@@ -40,19 +41,25 @@ class AnalyticalExpertDataset(Dataset):
             self.xtp1 = np.concatenate(expert_trajs[:,1:-1,:self.n,0], axis=0) # t in [1, T-1]
             self.utp1 = np.concatenate(expert_trajs[:,1:-1,self.n:,0], axis=0) # t in [1, T-1]
 
-        self.lx_expert = -1.*torch.from_numpy(env.target_margin(self.xt)).float()
-        self.gx_expert = -1.*torch.from_numpy(env.safety_margin(self.xt)).float()
-
-        self.rt = torch.min(self.lx_expert, self.gx_expert)
+        fail, self.gx_expert = env.check_failure(self.xt)
+        success, self.lx_expert = env.check_success(self.xt)
+        self.rt = env.get_cost(self.lx_expert, self.gx_expert, success, fail)
+        self.donet = env.get_done(self.xt, success, fail)
 
         self.xt = torch.from_numpy(self.xt).float()
         self.ut = torch.from_numpy(self.ut).float()
         self.xtp1 = torch.from_numpy(self.xtp1).float()
         self.utp1 = torch.from_numpy(self.utp1).float()
+        self.lx_expert = torch.from_numpy(self.lx_expert).float()
+        self.gx_expert = torch.from_numpy(self.gx_expert).float()
+        self.rt = torch.from_numpy(self.rt).float()
+        self.donet = torch.from_numpy(self.donet).float()
 
         self.num_expert_samples = self.xt.shape[0]
 
-        print("Number of expert samples: ", self.num_expert_samples)
+        print("Total Number of expert samples: ", self.num_expert_samples)
+        self.num_expert_samples = int(self.num_expert_samples*data_frac)
+        print("Number of expert samples used: ", self.num_expert_samples)
 
     def __len__(self):
         assert self.xt.shape[0] == self.xtp1.shape[0], "Shapes for data incorrect"
@@ -68,7 +75,7 @@ class AnalyticalExpertDataset(Dataset):
             'lx': self.lx_expert[idx, None],
             'gx': self.gx_expert[idx, None],
             'rt': self.rt[idx, None],
-            'done': torch.zeros((1)).float(), # not done
+            'done': self.donet[idx, None],
         }
 
         return sample
@@ -90,8 +97,8 @@ class AnalyticalTerminalDataset(Dataset):
 
         self.x_u = np.random.uniform(low=low, high=high, size=(self.num_samples, len))
 
-        self.lx = -1.*torch.from_numpy(env.target_margin(self.x_u[:, :env.n])).float()
-        self.gx = -1.*torch.from_numpy(env.safety_margin(self.x_u[:, :env.n])).float()
+        self.lx = torch.from_numpy(env.target_margin(self.x_u[:, :env.n])).float()
+        self.gx = torch.from_numpy(env.safety_margin(self.x_u[:, :env.n])).float()
 
         self.x_u = torch.from_numpy(self.x_u).float()
 
@@ -147,15 +154,19 @@ class AnalyticalMixedDataset(Dataset):
             self.xtp1 = np.concatenate(expert_trajs[:,1:-1,:self.n,0], axis=0) # t in [1, T-1]
             self.utp1 = np.concatenate(expert_trajs[:,1:-1,self.n:,0], axis=0) # t in [1, T-1]
 
-        self.lx_expert = -1.*torch.from_numpy(env.target_margin(self.xt)).float()
-        self.gx_expert = -1.*torch.from_numpy(env.safety_margin(self.xt)).float()
-
-        self.rt = torch.min(self.lx_expert, self.gx_expert)
+        fail, self.gx_expert = env.check_failure(self.xt)
+        success, self.lx_expert = env.check_success(self.xt)
+        self.rt = env.get_cost(self.lx_expert, self.gx_expert, success, fail)
+        self.donet = env.get_done(self.xt, success, fail)
 
         self.xt = torch.from_numpy(self.xt).float()
         self.ut = torch.from_numpy(self.ut).float()
         self.xtp1 = torch.from_numpy(self.xtp1).float()
         self.utp1 = torch.from_numpy(self.utp1).float()
+        self.lx_expert = torch.from_numpy(self.lx_expert).float()
+        self.gx_expert = torch.from_numpy(self.gx_expert).float()
+        self.rt = torch.from_numpy(self.rt).float()
+        self.donet = torch.from_numpy(self.donet).float()
 
         self.num_expert_samples = self.xt.shape[0]
 
@@ -168,11 +179,11 @@ class AnalyticalMixedDataset(Dataset):
                 high=env.high, 
                 size=(int(num_terminal_samples), env.n)
             )
-            _lx_samples = -1.*env.target_margin(_x_samples)
-            _gx_samples = -1.*env.safety_margin(_x_samples)
-            _rx_samples = np.minimum(_lx_samples, _gx_samples)
+            success, _lx_samples = env.check_success(_x_samples)
+            fail, _gx_samples = env.check_failure(_x_samples)
+            _rx_samples = env.get_cost(_lx_samples, _gx_samples, success, fail)
 
-            reach_avoid_set = np.logical_and((_lx_samples>0.), (_gx_samples>0.))
+            reach_avoid_set = np.logical_and(success, (not fail))
 
             self.x_terminal.append(_x_samples[reach_avoid_set])
             self.lx_terminal.append(_lx_samples[reach_avoid_set])
@@ -204,7 +215,7 @@ class AnalyticalMixedDataset(Dataset):
                 'lx': self.lx_expert[idx, None],
                 'gx': self.gx_expert[idx, None],
                 'rt': self.rt[idx, None],
-                'done': torch.zeros((1)).float(), # not done
+                'done': self.donet[idx, None], # not done
             }
         else:
             _idx = idx - self.num_expert_samples

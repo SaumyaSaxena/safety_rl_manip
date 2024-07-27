@@ -15,10 +15,10 @@ from gym_reachability import gym_reachability  # register Custom Gym envs.
 logger = logging.getLogger(__name__)
 
 # @hydra.main(config_path='cfg/', config_name='train/train_pickup1D_ddpg.yaml')
-@hydra.main(config_path='cfg/', config_name='train/train_point_mass_cont_ddpg.yaml')
+@hydra.main(config_path='cfg/', config_name='train_point_mass_cont_ddpg_main.yaml')
 def main(cfg):
+    
     hydra_dir = Path(os.getcwd())
-    cfg = cfg.train
 
     logger.info(f"Using GPU: {cfg.get('gpu', 0)}")
     if not cfg.debug:
@@ -37,6 +37,7 @@ def main(cfg):
 
     env_name = cfg.env_name
     env_cfg = cfg.envs[env_name]
+
     train_cfg = cfg.train_cfg
     
     agent = DDPG(
@@ -45,7 +46,7 @@ def main(cfg):
     )
 
     step=0
-    if train_cfg.warmupQ:
+    if train_cfg.warmup:
         step = agent.initQ()
     
     agent.learn(step)

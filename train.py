@@ -97,7 +97,7 @@ def main(cfg):
         terminalType=cfg.terminalType, debug=cfg.debug,
     )
 
-    if cfg.warmup:
+    if cfg.warmupQ:
         print("\n== Warmup Q ==")
         lossList = agent.initQ(
             env, cfg.warmupIter, hydra_dir, num_warmup_samples=cfg.num_warmup_samples, vmin=vmin,

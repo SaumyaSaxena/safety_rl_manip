@@ -61,8 +61,6 @@ class PointMass1DContEnv(gym.Env):
     self.state = np.zeros(self.n)
     self.doneType = cfg.doneType
 
-    
-
     # Visualization Parameters
     self.visual_initial_states = [
       np.array([-1.75, 0.]),
@@ -104,78 +102,62 @@ class PointMass1DContEnv(gym.Env):
     # Repeat sampling until outside obstacle if needed.
     while inside_obs:
       xy_sample = np.random.uniform(low=self.low, high=self.high)
-      g_x = self.safety_margin(xy_sample)
-      inside_obs = (g_x > 0)
+      inside_obs, g_x = self.check_failure(xy_sample)
       if sample_inside_obs:
         break
 
     return xy_sample
   
+  def get_cost(self, l_x, g_x, success, fail):
+    if self.costType == 'dense_ell':
+      cost = l_x
+    elif self.costType == 'dense':
+      cost = l_x + g_x
+    elif self.costType == 'sparse':
+      cost = 0.
+    elif self.costType == 'max_ell_g':
+      if 'reward' in self.return_type:
+        cost = np.minimum(l_x, g_x)
+      else:
+        cost = np.maximum(l_x, g_x)
+    else:
+        raise ValueError("invalid cost type!")
+    
+    if 'reward' in self.return_type:
+      cost[success] = -1.*self.reward
+      cost[fail] = -1.*self.penalty
+    else:
+      cost[success] = self.reward
+      cost[fail] = self.penalty
+    return cost
+
+  def get_done(self, state, success, fail):
+    # state: shape(batch,n)
+    if self.doneType == 'toEnd':
+      done = self.check_within_env(state)
+    elif self.doneType == 'fail':
+      done = fail
+    elif self.doneType == 'TF':
+      done = np.logical_or(fail, success)
+    elif self.doneType == 'all':
+      done = np.logical_or(np.logical_or(fail, success), self.check_within_env(state))
+    else:
+      raise ValueError("invalid done type!")
+    return done
+  
   # == Dynamics ==
   def step(self, action):
 
     ut = np.array(action[0])
-    state, [l_x, g_x] = self.integrate_forward(self.state, ut)
-    self.state = state
+    xtp1 = self.integrate_forward(self.state, ut)
 
-    fail = g_x > 0
-    success = l_x <= 0
+    fail, g_x = self.check_failure(self.state.reshape(1,self.n))
+    success, l_x = self.check_success(self.state.reshape(1,self.n))
+    done = self.get_done(self.state.reshape(1,self.n), success, fail)[0]
+    cost = self.get_cost(l_x, g_x, success, fail)[0]
 
-    # = `cost` signal
-    if self.mode == 'RA':
-      if fail:
-        cost = self.penalty
-      elif success:
-        cost = self.reward
-      else:
-        # cost = 0.
-        if self.costType == 'dense_ell':
-          cost = l_x
-        elif self.costType == 'dense':
-          cost = l_x + g_x
-        elif self.costType == 'sparse':
-          cost = 0. * self.scaling
-        elif self.costType == 'max_ell_g':
-          cost = max(l_x, g_x)
-        else:
-          raise ValueError("invalid cost type!")
-    else:
-      if fail:
-        cost = self.penalty
-      elif success:
-        cost = self.reward
-      else:
-        if self.costType == 'dense_ell':
-          cost = l_x
-        elif self.costType == 'dense':
-          cost = l_x + g_x
-        elif self.costType == 'sparse':
-          cost = 0. * self.scaling
-        elif self.costType == 'max_ell_g':
-          cost = max(l_x, g_x)
-        else:
-          raise ValueError("invalid cost type!")
-
-    # = `done` signal
-    if self.doneType == 'toEnd':
-      done = self.check_within_env(self.state)
-    elif self.doneType == 'fail':
-      done = fail
-    elif self.doneType == 'TF':
-      done = fail or success
-    elif self.doneType == 'all':
-      done = fail or success or self.check_within_env(self.state)
-    else:
-      raise ValueError("invalid done type!")
-
-    # = `info`
-    if done and self.doneType == 'fail':
-      info = {"g_x": self.penalty * self.scaling, "l_x": l_x}
-    else:
-      info = {"g_x": g_x, "l_x": l_x}
-    
-    if 'reward' in self.return_type:
-      cost = -1.*cost
+    self.state = xtp1
+    info = {"g_x": g_x[0], "l_x": l_x[0]}
     return np.copy(self.state), cost, done, info
 
   def integrate_forward(self, state, ut):
@@ -187,12 +169,7 @@ class PointMass1DContEnv(gym.Env):
     xtp1 = state.copy()
     xtp1[0] = state[0] + state[1]*self.dt # x_tp1 = xt + xdot_t *  dt
     xtp1[1] = state[1] + ut*self.dt # xdot_tp1 = xdot_t + u *  dt
-
-    l_x = self.target_margin(xtp1.reshape(1,self.n))
-    g_x = self.safety_margin(xtp1.reshape(1,self.n))
-
-    info = np.array([l_x[0], g_x[0]])
-    return xtp1, info
+    return xtp1
 
   # == Setting Hyper-Parameters ==
   def set_costParam(self):
@@ -214,7 +191,13 @@ class PointMass1DContEnv(gym.Env):
     self.costType = self.env_cfg.costType
     self.scaling = self.env_cfg.scaling
     self.return_type = self.env_cfg.return_type
-
+  
+  def find_boundary_value_fn(self, s):
+    # s: shape (batch, n)
+    wall_left = self.low[0] - s[...,0] + self.wall_thickness
+    wall_right = s[...,0] - self.high[0] + self.wall_thickness
+    return np.maximum(wall_left, wall_right)
+  
   # == Getting Margin ==
   def safety_margin(self, s):
     """Computes the margin (e.g. distance) between the state and the failue set.
@@ -226,6 +209,7 @@ class PointMass1DContEnv(gym.Env):
       float: postive numbers indicate being inside the failure set (safety
           violation).
     """
+    # g(x)>0 is obstacle
     obstacle = signed_dist_fn_rectangle(
       s,
       np.array(self.env_cfg.obstacle_set.low), 
@@ -233,14 +217,12 @@ class PointMass1DContEnv(gym.Env):
       obstacle=True)
 
     boundary = self.find_boundary_value_fn(s)
+    
+    gx = self.scaling * np.maximum(obstacle, boundary)
 
-    return self.scaling * np.maximum(obstacle, boundary)
-  
-  def find_boundary_value_fn(self, s):
-    # s: shape (batch, n)
-    wall_left = self.low[0] - s[...,0] + self.wall_thickness
-    wall_right = s[...,0] - self.high[0] + self.wall_thickness
-    return np.maximum(wall_left, wall_right)
+    if 'reward' in self.return_type: # g(x)<0 is obstacle
+      gx = -1.*gx
+    return gx
   
   def target_margin(self, s):
     """Computes the margin (e.g. distance) between the state and the target set.
@@ -259,21 +241,40 @@ class PointMass1DContEnv(gym.Env):
       np.array(self.env_cfg.target_set.low), 
       np.array(self.env_cfg.target_set.high),)
 
-    return self.scaling * lx
+    lx = self.scaling * lx
 
+    if 'reward' in self.return_type: # l(x)>0 is target
+      lx = -1.*lx
+
+    return lx
+
+  def check_failure(self, state):
+    g_x = self.safety_margin(state)
+    if 'reward' in self.return_type: 
+      return g_x<0, g_x
+    else:
+      return g_x>0, g_x # g(x)>0 is failure
+  
+  def check_success(self, state):
+    l_x = self.target_margin(state)
+    if 'reward' in self.return_type: 
+      return l_x>0, l_x
+    else:
+      return l_x<0, l_x # l(x)<0 is target
+    
   # == Getting Information ==
   def check_within_env(self, state):
     """Checks if the robot is still in the environment.
 
     Args:
-        state (np.ndarray): the state of the agent.
+        state (np.ndarray): the state of the agent. shape = (batch, n)
 
     Returns:
         bool: True if the agent is not in the environment.
     """
-    outsideLeft = (state[0] <= self.bounds[0, 0])
-    outsideRight = (state[0] >= self.bounds[0, 1])
-    return outsideLeft or outsideRight
+    outsideLeft = (state[...,0] <= self.bounds[0, 0])
+    outsideRight = (state[...,0] >= self.bounds[0, 1])
+    return np.logical_or(outsideLeft, outsideRight)
 
   def get_warmup_examples(self, num_warmup_samples=100):
     """Gets the warmup samples.
@@ -335,7 +336,7 @@ class PointMass1DContEnv(gym.Env):
     plt.savefig(save_plot_name)
     plt.close()
     if not debug:
-      wandb.log({f"{save_plot_name}": wandb.Image(save_plot_name)})
+      wandb.log({f"Value_fn_{name}": wandb.Image(save_plot_name)})
 
   def plot_env(self, save_dir=''):
       

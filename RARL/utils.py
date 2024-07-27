@@ -95,6 +95,7 @@ def calc_false_pos_neg_rate(pred_v, GT_v):
 
   return false_pos_rate, false_neg_rate
 
+import heapq
 from heapq import heappush, heappop
 class TopKLogger:
   def __init__(self, k: int):
@@ -114,3 +115,7 @@ class TopKLogger:
         return True
       else:
         return False
+  
+  def best_ckpt(self):
+    success, ckpt = heapq.nlargest(1,self.checkpoint_queue)[0]
+    return ckpt

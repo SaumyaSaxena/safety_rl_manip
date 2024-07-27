@@ -28,6 +28,7 @@ class ReplayBuffer:
         self.gx_buf = np.zeros(size, dtype=np.float32)
         self.device = device
         self.ptr, self.size, self.max_size = 0, 0, size
+        self.ptr_start = 0
 
     def store(self, obs, act, rew, next_obs, done, lx, gx):
         self.obs_buf[self.ptr] = obs
@@ -37,7 +38,7 @@ class ReplayBuffer:
         self.done_buf[self.ptr] = done
         self.lx_buf[self.ptr] = lx
         self.gx_buf[self.ptr] = gx
-        self.ptr = (self.ptr+1) % self.max_size
+        self.ptr = self.ptr_start + (self.ptr+1-self.ptr_start) % (self.max_size-self.ptr_start)
         self.size = min(self.size+1, self.max_size)
 
     def sample_batch(self, batch_size=32):
@@ -160,13 +161,18 @@ class DDPG(torch.nn.Module):
         self.update_after = train_cfg.update_after
         self.update_every = train_cfg.update_every
         self.act_noise = train_cfg.act_noise
+        self.noise_decay = train_cfg.get('noise_decay', 1.)
         self.num_test_episodes = train_cfg.num_test_episodes
         self.max_ep_len = train_cfg.max_ep_len
         self.model_save_freq = train_cfg.model_save_freq
         self.plot_save_freq = train_cfg.plot_save_freq
-        self.warmupQ = train_cfg.warmupQ
+        self.warmup = train_cfg.warmup
         self.warmup_cfg = train_cfg.warmup_cfg
-        
+
+        # Gamma scheduler
+        self.gamma_list = np.ones(self.epochs)
+        self.gamma_list[:train_cfg.gamma_warmup_epochs] = np.linspace(self.gamma, 1., train_cfg.gamma_warmup_epochs)
+
         self.outFolder = outFolder
         self.debug = debug
 
@@ -183,12 +189,12 @@ class DDPG(torch.nn.Module):
         self.act_dim = self.env.action_space.shape[0]
 
         # Action limit for clamping: critically, assumes all dimensions share the same bound!
-        self.act_limit = self.env.action_space.high[0]
 
         # Create actor-critic module and target networks
         self.ac = DDPG_core.MLPActorCritic(
             self.env.observation_space, 
-            self.env.action_space, 
+            self.env.action_space,
+            device,
             **train_cfg.ac_kwargs
         ).to(self.device)
         self.ac_targ = deepcopy(self.ac).to(self.device)
@@ -270,10 +276,12 @@ class DDPG(torch.nn.Module):
         if self.mode == 'lagrange':
             backup = r + self.gamma * (1 - done) * q_pi_targ
         elif self.mode == 'RA':
+            r = torch.min(lx, gx)
             V_non_terminal = torch.min(
                 gx,
                 torch.max(lx, q_pi_targ),
             )
+            
             terminal = done * r
             non_terminal = (1 - done) * (r*(1 - self.gamma) + V_non_terminal * self.gamma)
             backup = terminal + non_terminal
@@ -389,7 +397,9 @@ class DDPG(torch.nn.Module):
     
     def add_expert_to_buffer(self):
         dataset =  AnalyticalExpertDataset(
-            self.test_env, filename=self.train_cfg.expert_data_loc)
+            self.test_env, 
+            data_frac=self.train_cfg.expert_data_frac, 
+            filename=self.train_cfg.expert_data_loc)
         expert_dataloader = torch.utils.data.DataLoader(
             dataset,
             batch_size=1,
@@ -405,7 +415,9 @@ class DDPG(torch.nn.Module):
             lx, gx  = batch['lx'].flatten(), batch['gx'].flatten()
             d = d > 0.  # bool
             self.replay_buffer.store(o, a, r, o2, d, lx, gx)
-        
+
+        self.replay_buffer.ptr_start = len(dataset)
+        assert len(dataset) < self.replay_buffer.max_size, "Size of expert dataset if greater than the max buffer storage allowed."
         print("DONE Adding expert demonstrations to buffer")
 
     # Set up function for computing DDPG Q-loss
@@ -418,14 +430,10 @@ class DDPG(torch.nn.Module):
         # Bellman backup for Q function
         with torch.no_grad():
             q_pi_targ = self.ac_targ.q(o2, self.ac_targ.pi(o2))
-            if self.mode == "RA":
+            if self.mode == 'RA':
                 backup = torch.zeros(q.shape).float().to(self.device)
                 done = d > 0.
                 not_done = torch.logical_not(done)
-
-                # Maximize value function
-                lx = -1.*lx # lx > 0 is target set
-                gx = -1.*gx # gx < 0 is failure set
 
                 non_terminal = torch.min(
                     gx[not_done],
@@ -488,7 +496,7 @@ class DDPG(torch.nn.Module):
     def get_action(self, o, noise_scale):
         a = self.ac.act(torch.as_tensor(o, dtype=torch.float32).to(self.device))
         a += noise_scale * np.random.randn(self.act_dim)
-        return np.clip(a, -self.act_limit, self.act_limit)
+        return np.clip(a, self.env.action_space.low, self.env.action_space.high)
 
     def test_agent(self, epoch):
         avg_test_return, avg_test_ep_len = 0. , 0.
@@ -545,8 +553,6 @@ class DDPG(torch.nn.Module):
             # torch.cuda.empty_cache()
             if not self.debug:
                 log_dict = {}
-                wandb.run.summary["FPR"] = 20.
-                wandb.run.summary["FNR"] = 30. #todo removepls
             
             # Until start_steps have elapsed, randomly sample actions
             # from a uniform distribution for better exploration. Afterwards, 
@@ -593,8 +599,11 @@ class DDPG(torch.nn.Module):
                         log_dict.update(loss_info)
 
             # End of epoch handling
-            if (t+1) % self.steps_per_epoch == 0:
-                epoch = (t+1) // self.steps_per_epoch
+            if (t+1-start_step) % self.steps_per_epoch == 0:
+                epoch = (t+1-start_step) // self.steps_per_epoch
+
+                self.gamma = self.gamma_list[min(epoch, self.epochs-1)]
+                self.act_noise = self.act_noise*self.noise_decay
 
                 # Test the performance of the deterministic version of the agent.
                 print(f"Testing at epoch: {epoch}")
@@ -603,9 +612,9 @@ class DDPG(torch.nn.Module):
                 # Save model
                 if (epoch % self.model_save_freq == 0) or (epoch == self.epochs):
                     print(f"Saving model at epoch: {epoch}")
+                    save_file_name = os.path.join(self.modelFolder, f"step_{t}_test_return_{avg_test_return:.2f}.pth")
                     status = self.topk_logger.push(save_file_name, avg_test_return)
                     if status:
-                        save_file_name = os.path.join(self.modelFolder, f"step_{t}_test_return_{avg_test_return:.2f}.pth")
                         torch.save(
                             obj={
                                 "state_dict": self.state_dict(),
@@ -623,13 +632,18 @@ class DDPG(torch.nn.Module):
 
                     if not self.debug:
                         log_dict.update({f'Epoch': epoch})
+                        log_dict.update({f'gamma': self.gamma})
+                        log_dict.update({f'act_noise': self.act_noise})
                         log_dict.update({f'Avg Test Return': avg_test_return})
                         log_dict.update({f'Avg Test Episode len': avg_test_ep_len})
                         log_dict.update({f'Time': time.time()-start_time})
 
             if not self.debug:
                 wandb.log(log_dict, step=t)
-        self.eval(debug=False) # uploading stuff to wandb
+        
+        # Eval best checkpoint so far
+        ckpt = torch.load(self.topk_logger.best_ckpt(), map_location=self.device)
+        self.eval(ckpt, debug=False) # uploading stuff to wandb
     
     def get_value_fn(self):
         # v = torch.zeros(self.test_env.grid_x_flat.shape[:-1]).to(self.device)
