@@ -2,15 +2,17 @@ debug: False
 gpu: 1
 seed: 0
 tag: ${now:%Y-%m-%d-%H-%M-%S}
-run_name: "train_DDPG_pickup1D_${train_cfg.mode}" 
+run_name: "train_DDPG_point_mass_${train_cfg.mode}_warmups" 
 # variant: ${train_cfg.warmup_cfg.warmup_type}_UpdatePiType_${train_cfg.warmup_cfg.warmupQ_expert.update_pi_type}
-variant: 'test'
+# variant: 'no_terminal_gammaSch150_lrSch'
+variant: 'in_buffer'
 
 hydra:
   run:
     dir: outputs/train/${run_name}/${tag}_${variant}
   job:
     chdir: True
+
 
 defaults:
   - /envs: gym_envs.yaml
@@ -23,9 +25,9 @@ wandb:
   name: ${run_name}_${variant}
 wandb_resume_id: null
 
-env_name: "pickup1D_env-v0"
+env_name: "point_mass_1D_cont_env-v0"
 envs:
-  pickup1D_env-v0:
+  point_mass_1D_cont_env-v0:
     doneType: 'all'
     return_type: 'reward'
     mode: ${train_cfg.mode}
@@ -44,21 +46,22 @@ train_cfg:
       num_terminal_samples: 1e+4
     warmupQ_expert:
       num_mixed_terminal_samples: 1e+4
-      expert_data_loc: '/home/saumyas/Projects/safe_control/HJR_manip/outputs/Pickup1D/pick_object_datasets/data_Pickup1D_pick_object_N_233.pkl'
+      expert_data_loc: '/home/saumyas/Projects/safe_control/HJR_manip/outputs/DoubleIntegrator/goto_goal_datasets/data_DoubleIntegrator_goto_goal_N_620.pkl'
       update_pi: True
       update_pi_type: 'expert' # 'expert', 'maxQ'
     warmup_pi:
-      expert_data_loc: '/home/saumyas/Projects/safe_control/HJR_manip/outputs/Pickup1D/pick_object_datasets/data_Pickup1D_pick_object_N_233.pkl'
+      expert_data_loc: '/home/saumyas/Projects/safe_control/HJR_manip/outputs/DoubleIntegrator/goto_goal_datasets/data_DoubleIntegrator_goto_goal_N_620.pkl'
   add_expert_to_buffer: False
-  expert_data_loc: '/home/saumyas/Projects/safe_control/HJR_manip/outputs/Pickup1D/pick_object_datasets/data_Pickup1D_pick_object_N_233.pkl'
+  expert_data_loc: '/home/saumyas/Projects/safe_control/HJR_manip/outputs/DoubleIntegrator/goto_goal_datasets/data_DoubleIntegrator_goto_goal_N_620.pkl'
+  expert_data_frac: 0.75
   mode: 'RA' # RA, lagrange
   seed: ${seed}
   steps_per_epoch: 4000
-  epochs: 100
+  epochs: 200
   replay_size: 1e+6
   gamma: 0.99
   schedule_gamma: True
-  gamma_warmup_epochs: 50
+  gamma_warmup_epochs: 150
   polyak: 0.995
   pi_lr: 1e-3 
   q_lr: 1e-3
@@ -87,3 +90,5 @@ train_cfg:
   save_top_k: 5
   ac_kwargs:
     hidden_sizes: [256,256]
+  
+

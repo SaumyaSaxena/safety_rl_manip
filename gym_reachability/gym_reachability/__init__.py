@@ -49,3 +49,8 @@ register(
     id="point_mass_1D_cont_env-v0",
     entry_point="gym_reachability.gym_reachability.envs:PointMass1DContEnv"
 )
+
+register(
+    id="slide_pickup_mujoco_env-v0",
+    entry_point="gym_reachability.gym_reachability.envs:SlidePickupMujocoEnv"
+)

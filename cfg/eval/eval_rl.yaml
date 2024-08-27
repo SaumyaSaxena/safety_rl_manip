@@ -4,5 +4,5 @@ debug: True # TODO: always true since we are not using wandb during eval
 eval_cfg:
   gpu: 0
   wandb_load:
-    run_path: 'iam-lab/safety_rl_manip/efdjkgio'
-    file: model/step_375999_test_return_1.51.pth
+    run_path: 'iam-lab/safety_rl_manip/96z2aq34'
+    file: model/step_591999_test_return_1.75.pth

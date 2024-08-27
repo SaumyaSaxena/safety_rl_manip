@@ -65,3 +65,83 @@ point_mass_1D_cont_env-v0:
   mode: 'lagrange'
   doneType: 'toEnd'
   sample_inside_obs: True
+
+slide_pickup_box2d_env-v0:
+  gravity: [0.0, -9.8]
+  T: 2.0
+  dt: 0.01
+  goal: [-1.,0.5]
+  collision_thresh: 1e-2
+  scene:
+    low: [-2, -2] # width, height
+    high: [2, 2]
+    pixels_per_meter: 200
+  table:
+    initial_pos: [2., -2.]
+    size: [4., 2.] # width, height
+    friction: 0.2
+    restitution: 0.0 # 0.99 bouncy
+    color1: [0.415,0.51,0.67]
+    color2: [0,0,0] # black
+  block1:
+    mass: 0.5
+    initial_pos: [0., -0.75]
+    size: [0.9, 0.2]
+    friction: 0.2
+    restitution: 0.0 # 0.99 bouncy
+    color1: [0., 0.6, 0.0] # green
+    color2: [0,0,0] # black
+    state_ranges: # x, y
+      low: [-2., -2.] 
+      high: [2., 2.]
+  block2:
+    mass: 0.5
+    initial_pos: [0., -0.25]
+    size: [0.9, 0.2]
+    friction: 0.2
+    restitution: 0.0
+    color1: [0,0,0]
+    color2: [0,0,0]
+    state_ranges: # x, y
+      low: [-2., -2.] 
+      high: [2., 2.]
+
+slide_pickup_box2d_env-v1:
+  gravity: [0.0, -9.8]
+  T: 2.0
+  dt: 0.0005
+  goal: [-0.5,0.5]
+  collision_thresh: 1e-2
+  scene:
+    low: [-1, -1] # width, height
+    high: [1, 1]
+    pixels_per_meter: 200
+  table:
+    initial_pos: [1., -1.]
+    size: [2., 1.] # width, height
+    friction: 0.1
+    restitution: 0.5 # 0.99 bouncy
+    color1: [0.415,0.51,0.67]
+    color2: [0,0,0] # black
+  block1:
+    mass: 0.5
+    initial_pos: [0., -0.75]
+    size: [0.4, 0.1]
+    friction: 0.1
+    restitution: 0.9 # 0.99 bouncy
+    color1: [0., 0.6, 0.0] # green
+    color2: [0,0,0] # black
+    state_ranges: # x, y
+      low: [-2., -2.] 
+      high: [2., 2.]
+  block2:
+    mass: 0.5
+    initial_pos: [0., -0.25]
+    size: [0.4, 0.1]
+    friction: 0.1
+    restitution: 0.9
+    color1: [0,0,0]
+    color2: [0,0,0]
+    state_ranges: # x, y
+      low: [-2., -2.] 
+      high: [2., 2.]

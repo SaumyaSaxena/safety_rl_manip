@@ -3,16 +3,15 @@ gpu: 1
 seed: 0
 tag: ${now:%Y-%m-%d-%H-%M-%S}
 # run_name: "train_expert_in_buffer_${train_cfg.expert_data_frac}_point_mass_cont_DDPG_RL_${train_cfg.mode}" 
-run_name: "train_gammaSch150_noiseSch_point_mass_cont_DDPG_RL_${train_cfg.mode}" 
-# run_name: "test" 
-# run_name: "train_${train_cfg.warmup_cfg.warmup_type}_UpdatePiType_${train_cfg.warmup_cfg.warmupQ_expert.update_pi_type}_point_mass_cont_DDPG_RL_${train_cfg.mode}" 
+run_name: "train_SAC_point_mass_${train_cfg.mode}"
+# variant: ${train_cfg.warmup_cfg.warmup_type}_UpdatePiType_${train_cfg.warmup_cfg.warmupQ_expert.update_pi_type}
+variant: 'gammaSch100'
 
 hydra:
   run:
-    dir: outputs/train/${run_name}/${tag}
+    dir: outputs/train/${run_name}/${tag}_${variant}
   job:
     chdir: True
-
 
 defaults:
   - /envs: gym_envs.yaml
@@ -20,9 +19,9 @@ defaults:
 
 wandb:
   entity: iam-lab
-  group: drabe
+  group: drabe/SAC
   project: safety_rl_manip
-  name: ${run_name}
+  name: ${run_name}_${variant}
 wandb_resume_id: null
 
 env_name: "point_mass_1D_cont_env-v0"
@@ -34,6 +33,7 @@ envs:
     costType: 'max_ell_g'
 
 train_cfg:
+  algo_name: SAC
   warmup: False
   warmup_cfg:
     batch_size: 200
@@ -59,18 +59,29 @@ train_cfg:
   epochs: 200
   replay_size: 1e+6
   gamma: 0.99
-  gamma_warmup_epochs: 150
+  schedule_gamma: True
+  gamma_warmup_epochs: 100
   polyak: 0.995
   pi_lr: 1e-3 
   q_lr: 1e-3
-  batch_size: 1000
+  AdamW:
+    eps: 1.0e-8
+    weight_decay: 0.01
+  scheduler:
+    sched: cosine
+    # epochs are updated in code: epochs <- total_epochs - warmup - cooldown
+    epochs: ${train_cfg.epochs}  # Total epochs to run (warmup + decay + cooldown)
+    min_lr: 1.0e-5
+    warmup_lr: 1.0e-4
+    warmup_epochs: 10
+    cooldown_epochs: 0
+  alpha: 0.2
+  batch_size: 100
   start_steps: 10000
   update_after: 1000
   update_every: 50
-  act_noise: 0.1
-  noise_decay: 0.985
   num_test_episodes: 20
-  max_ep_len: 200
+  max_ep_len: 1000
   model_save_freq: 2
   plot_save_freq: 10
   save_top_k: 5

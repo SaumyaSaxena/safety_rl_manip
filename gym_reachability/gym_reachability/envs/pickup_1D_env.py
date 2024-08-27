@@ -73,8 +73,6 @@ class Pickup1DEnv(gym.Env):
         self.sample_inside_obs = True
     elif self.doneType == 'TF' or self.doneType == 'fail':
         self.sample_inside_obs = False
-    
-    
 
     # Visualization Parameters
     self.visual_initial_states = [

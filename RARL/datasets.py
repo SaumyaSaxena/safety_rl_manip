@@ -183,7 +183,7 @@ class AnalyticalMixedDataset(Dataset):
             fail, _gx_samples = env.check_failure(_x_samples)
             _rx_samples = env.get_cost(_lx_samples, _gx_samples, success, fail)
 
-            reach_avoid_set = np.logical_and(success, (not fail))
+            reach_avoid_set = np.logical_and(success, (np.logical_not(fail)))
 
             self.x_terminal.append(_x_samples[reach_avoid_set])
             self.lx_terminal.append(_lx_samples[reach_avoid_set])

@@ -8,13 +8,14 @@ import time
 from omegaconf import OmegaConf
 
 from RARL.DDPG import DDPG
+from RARL.SAC import SAC
 
 from gym_reachability import gym_reachability  # register Custom Gym envs.
 
 logger = logging.getLogger(__name__)
 
 def main():
-    cfg = OmegaConf.load('cfg/eval/eval_ddpg.yaml')
+    cfg = OmegaConf.load('cfg/eval/eval_rl.yaml')
 
     logger.info(f"Using GPU: {cfg.get('gpu', 0)}")
 
@@ -40,9 +41,10 @@ def main():
     
     env_name = ckpt['env_name']
     mode = ckpt['train_cfg']['mode']
-    eval_path = os.path.join(eval_path, f'{env_name}_DDPG_{mode}', time_str)
+    algo_name = ckpt['train_cfg']['algo_name']
+    eval_path = os.path.join(eval_path, f'{env_name}_{algo_name}_{mode}', time_str)
 
-    agent = DDPG(
+    agent = eval(algo_name)(
         env_name, device, train_cfg=ckpt['train_cfg'], env_cfg=ckpt['env_cfg'],
         outFolder=eval_path, debug=cfg.debug
     )
