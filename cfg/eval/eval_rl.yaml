@@ -4,5 +4,12 @@ debug: True # TODO: always true since we are not using wandb during eval
 eval_cfg:
   gpu: 0
   wandb_load:
-    run_path: 'iam-lab/safety_rl_manip/96z2aq34'
-    file: model/step_591999_test_return_1.75.pth
+    run_path: 'iam-lab/safety_rl_manip/8caycaii' #RA 
+    file: model/step_303999_test_return_-13.28.pth
+    # run_path: 'iam-lab/safety_rl_manip/5pnfnieu' #lag 
+    # file: model/step_791999_test_return_-8.62.pth
+  eval_value_fn: True
+  eval_safe_rollouts: True
+  num_rollouts: 5000
+  save_rollout_gifs: True  
+  seed: 1

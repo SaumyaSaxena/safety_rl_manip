@@ -27,30 +27,30 @@ register(
 
 register(
     id="dubins_car_pe-v0",
-    entry_point="gym_reachability.gym_reachability.envs:DubinsCarPEEnv"
+    entry_point="safety_rl_manip.envs:DubinsCarPEEnv"
 )
 
 register(
     id="point_mass-v0",
-    entry_point="gym_reachability.gym_reachability.envs:PointMassEnv"
+    entry_point="safety_rl_manip.envs:PointMassEnv"
 )
 
 register(
     id="zermelo_show-v0",
-    entry_point="gym_reachability.gym_reachability.envs:ZermeloShowEnv"
+    entry_point="safety_rl_manip.envs:ZermeloShowEnv"
 )
 
 register(
     id="pickup1D_env-v0",
-    entry_point="gym_reachability.gym_reachability.envs:Pickup1DEnv"
+    entry_point="safety_rl_manip.envs:Pickup1DEnv"
 )
 
 register(
     id="point_mass_1D_cont_env-v0",
-    entry_point="gym_reachability.gym_reachability.envs:PointMass1DContEnv"
+    entry_point="safety_rl_manip.envs:PointMass1DContEnv"
 )
 
 register(
     id="slide_pickup_mujoco_env-v0",
-    entry_point="gym_reachability.gym_reachability.envs:SlidePickupMujocoEnv"
+    entry_point="safety_rl_manip.envs:SlidePickupMujocoEnv"
 )

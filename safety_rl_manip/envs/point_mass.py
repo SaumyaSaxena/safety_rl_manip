@@ -11,8 +11,8 @@ import gym.spaces
 import numpy as np
 import gym
 
-from utils.utils import nearest_real_grid_point
-from utils.utils import state_to_index
+from safety_rl_manip.utils.utils import nearest_real_grid_point
+from safety_rl_manip.utils.utils import state_to_index
 
 
 class PointMassEnv(gym.Env):

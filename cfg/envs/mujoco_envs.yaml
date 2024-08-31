@@ -1,30 +1,39 @@
 slide_pickup_mujoco_env-v0:
   frame_skip: 5
   img_size: [256, 256]
-  goal: [0.5, 0.45, 1.0]
+  goal: [0.6, 0.6, 0.5]
   thresh: 0.1
-  control_low: [-50.,-50.,-50.]
-  control_high: [50.,50.,50.]
+  control_low: [-100.,-100.,-100.]
+  control_high: [100.,100.,100.]
+  num_eval_trajs: 20
+  env_bounds:
+    low: [-0.69, 0.2, -0.2] #table bounds : table center is [0., 0.6]
+    high: [0.69, 0.99, 1.0] #table bounds
   block_bottom:
     mass: 0.5
-    initial_pos: [0.0, 0.45]
+    initial_pos: [0.0, 0.6]
     size: [0.1, 0.1, 0.03]
     rgba: [0, 1, 0, 1]
     friction: 0.2
     restitution: 0.0 # 0.99 bouncy
     state_ranges: # x, y
-      low: [-3., 0.45] 
-      high: [3., 0.45]
+      low: [-0.4, 0.35] 
+      high: [0.4, 0.85]
+    N_x: [50, 50]
   block_top:
     mass: 0.5
-    initial_pos: [0.0, 0.45]
+    initial_pos: [0.0, 0.6]
     size: [0.1, 0.1, 0.03]
     rgba: [1, 0, 0, 1]
     friction: 0.2
     restitution: 0.0
+    safety_set:
+      low: [0.3, 0.3, 0.05] # subtracted from initial block state to get safety boundary
+      high: [0.3, 0.3, 0.05] # added to initial block state to get safety boundary
+    N_x: [50, 50]
     state_ranges: # x, y
-      low: [-3., 0.45] # same as block_bottom
-      high: [3., 0.45] # same as block_bottom
+      low: [-0.4, 0.6] # same as block_bottom
+      high: [0.4, 0.6] # same as block_bottom
   penalty: 10.
   reward: -10.
   costType: 'max_ell_g'
@@ -32,3 +41,4 @@ slide_pickup_mujoco_env-v0:
   return_type: 'reward'
   mode: 'lagrange'
   doneType: 'all'
+  is_GT_value: False

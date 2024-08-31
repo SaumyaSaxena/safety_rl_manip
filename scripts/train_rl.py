@@ -8,14 +8,14 @@ import logging
 import wandb
 from omegaconf import OmegaConf
 
-from RARL.DDPG import DDPG
-from RARL.SAC import SAC
 
-from gym_reachability import gym_reachability  # register Custom Gym envs.
+from safety_rl_manip.models.RARL.DDPG import DDPG
+from safety_rl_manip.models.RARL.SAC import SAC
+
 
 logger = logging.getLogger(__name__)
 
-@hydra.main(config_path='cfg/', config_name='train_pickup1D_ddpg.yaml')
+@hydra.main(config_path='../cfg/', config_name='train_pickup_slide_mujoco_ddpg.yaml')
 # @hydra.main(config_path='cfg/', config_name='train_point_mass_cont_ddpg.yaml')
 # @hydra.main(config_path='cfg/', config_name='train_point_mass_cont_sac.yaml')
 def main(cfg):
@@ -41,9 +41,9 @@ def main(cfg):
     env_cfg = cfg.envs[env_name]
 
     train_cfg = cfg.train_cfg
-    
+    eval_cfg = cfg.eval_cfg
     agent = eval(train_cfg.algo_name)(
-        env_name, device, train_cfg=train_cfg, env_cfg=env_cfg,
+        env_name, device, train_cfg=train_cfg, eval_cfg=eval_cfg, env_cfg=env_cfg,
         outFolder=hydra_dir, debug=cfg.debug
     )
 

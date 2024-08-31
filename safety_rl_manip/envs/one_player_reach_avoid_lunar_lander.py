@@ -18,7 +18,7 @@ from Box2D.b2 import (
 import matplotlib.pyplot as plt
 import torch
 from shapely.geometry import Polygon, Point
-from gym_reachability.gym_reachability.envs import (
+from safety_rl_manip.envs import (
     MultiPlayerLunarLanderReachability
 )
 

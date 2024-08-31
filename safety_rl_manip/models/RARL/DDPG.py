@@ -11,8 +11,8 @@ import wandb
 from tqdm import trange
 from .utils import calc_false_pos_neg_rate, TopKLogger, ReplayBuffer, set_seed
 from timm.scheduler.scheduler_factory import create_scheduler
-from RARL.datasets import *
-
+from .datasets import *
+import imageio
 
 class DDPG(torch.nn.Module):
     """
@@ -99,13 +99,14 @@ class DDPG(torch.nn.Module):
 
     """
     def __init__(
-        self, env_name, device, train_cfg=None, env_cfg=None,
-        outFolder='', debug=False,
+        self, env_name, device, train_cfg=None, eval_cfg=None,
+        env_cfg=None, outFolder='', debug=False,
     ):
         super().__init__()
         self.env_name = env_name
         self.device = device
         self.train_cfg = train_cfg
+        self.eval_cfg = eval_cfg
         self.env_cfg = env_cfg
 
         self.mode = train_cfg.mode
@@ -145,7 +146,8 @@ class DDPG(torch.nn.Module):
 
         self.figureFolder = os.path.join(outFolder, 'figure')
         os.makedirs(self.figureFolder, exist_ok=True)
-        self.env.plot_env(save_dir=self.figureFolder)
+        if self.eval_cfg.eval_value_fn:
+            self.env.plot_env(save_dir=self.figureFolder)
 
         self.obs_dim = self.env.observation_space.shape
         self.act_dim = self.env.action_space.shape[0]
@@ -182,7 +184,6 @@ class DDPG(torch.nn.Module):
         os.makedirs(self.modelFolder, exist_ok=True)
 
         self.topk_logger = TopKLogger(train_cfg.save_top_k)
-
 
     def create_dataloader(self):
         if self.warmup_cfg.warmup_type == 'warmupQ_terminal_all_states':
@@ -338,7 +339,7 @@ class DDPG(torch.nn.Module):
                     batch[k] = v.to(self.device)
                 self.warmup_update(epoch, step, batch)
                 step += 1
-            if (epoch % self.plot_save_freq == 0):
+            if (epoch % self.plot_save_freq == 0) and self.eval_cfg.eval_value_fn:
                 # Plot value function
                 v = self.get_value_fn()
                 self.test_env.plot_value_fn(v.detach().cpu().numpy(),
@@ -478,33 +479,22 @@ class DDPG(torch.nn.Module):
         avg_test_return = avg_test_return/self.num_test_episodes
         avg_test_ep_len = avg_test_ep_len/self.num_test_episodes
 
-        # Rollout trajs for visualization
-        trajs = []
-        for init_s in self.test_env.visual_initial_states:
-            rollout = []
-            o, d, ep_ret, ep_len = self.test_env.reset(init_s), False, 0, 0
-            rollout.append(o)
-            while not(d or (ep_len == self.max_ep_len)):
-                # Take deterministic actions at test time (noise_scale=0)
-                o, r, d, _ = self.test_env.step(self.get_action(o, 0))
-                rollout.append(o)
-                ep_len += 1
-            trajs.append(np.array(rollout))
-
         # Plot learned value function and overlay trajs on it
         if (epoch % self.plot_save_freq == 0):
-            # Plot value function
-            v = self.get_value_fn()
-            self.test_env.plot_value_fn(v.detach().cpu().numpy(),
-                self.test_env.grid_x,
-                target_T=self.test_env.target_T,
-                obstacle_T=self.test_env.obstacle_T,
-                trajs=trajs, 
-                save_dir=self.figureFolder, 
-                name=f'epoch_{epoch}')
+            trajs=[]
+            # trajs = self.do_visualization_rollouts(save_rollout_gifs=self.eval_cfg.save_rollout_gifs)
+            if self.eval_cfg.eval_value_fn:
+                # Plot value function
+                v = self.get_value_fn()
+                self.test_env.plot_value_fn(v.detach().cpu().numpy(),
+                    self.test_env.grid_x,
+                    target_T=self.test_env.target_T,
+                    obstacle_T=self.test_env.obstacle_T,
+                    trajs=trajs, 
+                    save_dir=self.figureFolder, 
+                    name=f'epoch_{epoch}')
 
         return avg_test_return, avg_test_ep_len
-
 
     def learn(self, start_step=0):
         if self.train_cfg.add_expert_to_buffer:
@@ -616,7 +606,7 @@ class DDPG(torch.nn.Module):
         
         # Eval best checkpoint so far
         ckpt = torch.load(self.topk_logger.best_ckpt(), map_location=self.device)
-        self.eval(ckpt, debug=False) # uploading stuff to wandb
+        self.eval(ckpt, self.eval_cfg, debug=False) # uploading stuff to wandb
     
     def get_value_fn(self):
         # v = torch.zeros(self.test_env.grid_x_flat.shape[:-1]).to(self.device)
@@ -627,65 +617,137 @@ class DDPG(torch.nn.Module):
             v = v.reshape(*self.test_env.grid_x.shape[:-1])
         return v
 
-    def eval(self, ckpt=None, debug=True):
+    def do_visualization_rollouts(self, save_rollout_gifs=False):
+        trajs = []
+        for init_s in self.test_env.visual_initial_states:
+            rollout, at_all, imgs = [], [], []
+            o, d, ep_ret, ep_len = self.test_env.reset(init_s), False, 0, 0
+            rollout.append(o)
+
+            while not(d or (ep_len == self.max_ep_len)):
+                # Take deterministic actions at test time (noise_scale=0)
+                at = self.get_action(o, 0)
+                o, r, d, _ = self.test_env.step(at)
+
+                at_all.append(at)
+                rollout.append(o)
+                if save_rollout_gifs:
+                    self.test_env.renderer.update_scene(self.test_env.data, camera='left_cap3') 
+                    img = self.test_env.renderer.render()
+                    imgs.append(img)
+                ep_len += 1
+            trajs.append(np.array(rollout))
+            if save_rollout_gifs:
+                imageio.mimsave(os.path.join(self.figureFolder, f'eval_traj_{len(trajs)}.gif'), 
+                    imgs, duration=ep_len*self.test_env.dt)
+                self.test_env.plot_trajectory(np.stack(rollout,axis=0), np.stack(at_all,axis=0), os.path.join(self.figureFolder, f'eval_traj_{len(trajs)}.png'))
+        return trajs
+
+    def eval(self, ckpt=None, eval_cfg=None, debug=True):
         if ckpt is not None:
             self.load_state_dict(ckpt["state_dict"])
-        GT_value_fn, GT_grid_x, GT_target_T, GT_obstacle_T = self.test_env.get_GT_value_fn()
-        GT_value_fn_flat = GT_value_fn.flatten()
-        GT_grid_flat = torch.from_numpy(GT_grid_x.reshape(-1, GT_grid_x.shape[-1])).float().to(self.device)
+        if eval_cfg is None:
+            eval_cfg = self.eval_cfg
 
-        pred_value_fn_flat = self.ac_targ.q(
-            GT_grid_flat, 
-            self.ac_targ.pi(GT_grid_flat)).detach().cpu().numpy()
-        pred_value_fn = pred_value_fn_flat.reshape(*GT_grid_x.shape[:-1])
+        set_seed(eval_cfg.seed)
+        trajs = self.do_visualization_rollouts(save_rollout_gifs=eval_cfg.save_rollout_gifs)
 
-        false_pos_rate, false_neg_rate = calc_false_pos_neg_rate(pred_value_fn_flat, GT_value_fn_flat)
+        if eval_cfg.eval_value_fn:
+            if self.env_cfg.get('is_GT_value', False): # TODO(saumya): fix this
+                GT_value_fn, GT_grid_x, GT_target_T, GT_obstacle_T = self.test_env.get_GT_value_fn()
+                GT_value_fn_flat = GT_value_fn.flatten()
+                GT_grid_flat = torch.from_numpy(GT_grid_x.reshape(-1, GT_grid_x.shape[-1])).float().to(self.device)
+            else:
+                GT_target_T = self.test_env.target_T
+                GT_obstacle_T = self.test_env.obstacle_T
+                GT_grid_x = self.test_env.grid_x
+                GT_grid_flat = torch.from_numpy(GT_grid_x.reshape(-1, GT_grid_x.shape[-1])).float().to(self.device)
 
-        # Save results
-        results = {
-            'false_pos_rate': false_pos_rate,
-            'false_neg_rate': false_neg_rate,
-        }
-        fname = os.path.join(self.outFolder, 'results.json')
-        with open(fname, "w") as f:
-            json.dump(results, f, indent=4)
+            pred_value_fn_flat = self.ac_targ.q(
+                GT_grid_flat, 
+                self.ac_targ.pi(GT_grid_flat)).detach().cpu().numpy()
+            pred_value_fn = pred_value_fn_flat.reshape(*GT_grid_x.shape[:-1])
 
-        print(f"Saving FPR={false_pos_rate}; FNR={false_neg_rate} results to: {str(fname)}")
+            #Plotting value function
+            self.test_env.plot_value_fn(
+                pred_value_fn,
+                GT_grid_x,
+                target_T=GT_target_T,
+                obstacle_T=GT_obstacle_T,
+                trajs=trajs,
+                save_dir=self.figureFolder,
+                name=f'Pred_value_fn_inf_horizon',
+                debug=debug)
+
+            if self.env_cfg.get('is_GT_value', False): # TODO(saumya): fix this
+                false_pos_rate, false_neg_rate = calc_false_pos_neg_rate(pred_value_fn_flat, GT_value_fn_flat)
+                            # Save results
+                results = {
+                    'false_pos_rate': false_pos_rate,
+                    'false_neg_rate': false_neg_rate,
+                }
+                fname = os.path.join(self.outFolder, 'results_compare_to_GT.json')
+                with open(fname, "w") as f:
+                    json.dump(results, f, indent=4)
+
+                print(f"Saving GT FPR={false_pos_rate}; FNR={false_neg_rate} results to: {str(fname)}")
+
+                #Plotting GT value function
+                self.test_env.plot_value_fn(
+                    GT_value_fn,
+                    GT_grid_x,
+                    target_T=GT_target_T,
+                    obstacle_T=GT_obstacle_T,
+                    save_dir=self.figureFolder,
+                    name=f'GT_value_fn_inf_horiron',
+                    debug=debug)
+        
+            print(f"Saving predicted and GT value fn plots to: {str(self.figureFolder)}")
+        
+        if eval_cfg.eval_safe_rollouts:
+            FP, FN, TP, TN, num_pred_success, num_gt_success = 0, 0, 0, 0, 0, 0
+            for i in range(eval_cfg.num_rollouts):
+                o, d, ep_ret, ep_len = self.test_env.reset(), False, 0, 0
+                pred_v = self.ac_targ.q(
+                    torch.from_numpy(o).float().to(self.device), 
+                    self.ac_targ.pi(torch.from_numpy(o).float().to(self.device))).detach().cpu().numpy()
+                pred_success = pred_v > 0.
+                
+                gt_success = False
+                while not(d or (ep_len == self.max_ep_len)):
+                    o, r, d, _ = self.test_env.step(self.get_action(o, 0))
+                    fail, _ = self.test_env.check_failure(o.reshape(1,self.test_env.n))
+                    succ, _ = self.test_env.check_success(o.reshape(1,self.test_env.n))
+                    gt_success = np.logical_or(np.logical_and(not fail[0], succ[0]), gt_success)
+                    ep_len += 1
+                
+                num_pred_success += pred_success
+                num_gt_success += gt_success
+                FP += np.sum(np.logical_and((gt_success == False), (pred_success == True)))
+                FN += np.sum(np.logical_and((gt_success == True), (pred_success == False)))
+                TP += np.sum(np.logical_and((gt_success == True), (pred_success == True)))
+                TN += np.sum(np.logical_and((gt_success == False), (pred_success == False)))
+            false_pos_rate = FP/(FP+TN)
+            false_neg_rate = FN/(FN+TP)
+            
+            # Save results
+            results = {
+                'false_pos_rate': false_pos_rate,
+                'false_neg_rate': false_neg_rate,
+                'total_num_rollouts': float(self.train_cfg.get('eval_num_rollouts', 5000)),
+                'FP': float(FP),
+                'FN': float(FN),
+                'TP': float(TP),
+                'TN': float(TN),
+                'num_pred_success': float(num_pred_success),
+                'num_gt_success': float(num_gt_success),
+            }
+            fname = os.path.join(self.outFolder, 'results_rollouts.json')
+            with open(fname, "w") as f:
+                json.dump(results, f, indent=4)
+
+            print(f"Saving rollouts FPR={false_pos_rate}; FNR={false_neg_rate} results to: {str(fname)}")
 
         if not debug:
             wandb.run.summary["FPR"] = false_pos_rate
             wandb.run.summary["FNR"] = false_neg_rate
-
-        trajs = []
-        for init_s in self.test_env.visual_initial_states:
-            rollout = []
-            o, d, ep_ret, ep_len = self.test_env.reset(init_s), False, 0, 0
-            rollout.append(o)
-            while not(d or (ep_len == self.max_ep_len)):
-                # Take deterministic actions at test time (noise_scale=0)
-                o, r, d, _ = self.test_env.step(self.get_action(o, 0))
-                rollout.append(o)
-                ep_len += 1
-            trajs.append(np.array(rollout))
-        
-        #Plotting value functions
-        self.test_env.plot_value_fn(
-            GT_value_fn,
-            GT_grid_x,
-            target_T=GT_target_T,
-            obstacle_T=GT_obstacle_T,
-            save_dir=self.figureFolder,
-            name=f'GT_value_fn_inf_horiron',
-            debug=debug)
-        
-        self.test_env.plot_value_fn(
-            pred_value_fn,
-            GT_grid_x,
-            target_T=GT_target_T,
-            obstacle_T=GT_obstacle_T,
-            trajs=trajs,
-            save_dir=self.figureFolder,
-            name=f'Pred_value_fn_inf_horizon',
-            debug=debug)
-
-        print(f"Saving predicted and GT value fn plots to: {str(self.figureFolder)}")

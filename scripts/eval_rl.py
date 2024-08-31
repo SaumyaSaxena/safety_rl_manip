@@ -7,10 +7,8 @@ import wandb
 import time
 from omegaconf import OmegaConf
 
-from RARL.DDPG import DDPG
-from RARL.SAC import SAC
-
-from gym_reachability import gym_reachability  # register Custom Gym envs.
+from safety_rl_manip.models.RARL.DDPG import DDPG
+from safety_rl_manip.models.RARL.SAC import SAC
 
 logger = logging.getLogger(__name__)
 
@@ -45,10 +43,11 @@ def main():
     eval_path = os.path.join(eval_path, f'{env_name}_{algo_name}_{mode}', time_str)
 
     agent = eval(algo_name)(
-        env_name, device, train_cfg=ckpt['train_cfg'], env_cfg=ckpt['env_cfg'],
+        env_name, device, train_cfg=ckpt['train_cfg'], eval_cfg=eval_cfg,
+        env_cfg=ckpt['env_cfg'],
         outFolder=eval_path, debug=cfg.debug
     )
-    agent.eval(ckpt)
+    agent.eval(ckpt, eval_cfg=eval_cfg)
 
 if __name__ == "__main__":
     main()

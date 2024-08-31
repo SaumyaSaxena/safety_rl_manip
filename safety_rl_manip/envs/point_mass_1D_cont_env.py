@@ -352,7 +352,7 @@ class PointMass1DContEnv(gym.Env):
     targ = axes[0].contour(self.grid_x[...,0], self.grid_x[...,1], self.target_T, levels=[0], colors='black')
     axes[0].set_title(f'Target set l(x)')
     axes[0].set_xlabel('X')
-    axes[0].set_xlabel('X dot')
+    axes[0].set_ylabel('X dot')
     axes[0].clabel(targ, fontsize=12, inline=1, fmt='target')
     fig.colorbar(ctr_t, ax=axes[0])
 
@@ -364,7 +364,7 @@ class PointMass1DContEnv(gym.Env):
     obst = axes[1].contour(self.grid_x[...,0], self.grid_x[...,1], self.obstacle_T, levels=[0], colors='black')
     axes[1].set_title(f'Obstacle set g(x)')
     axes[1].set_xlabel('X')
-    axes[1].set_xlabel('X dot')
+    axes[1].set_ylabel('X dot')
     # axes[1].clabel(obst, fontsize=12, inline=1, fmt='obstacle')
     fig.colorbar(ctr_o, ax=axes[1])
 
@@ -374,7 +374,7 @@ class PointMass1DContEnv(gym.Env):
     axes[2].contour(self.grid_x[...,0], self.grid_x[...,1], ra, levels=[0], colors='black')
     axes[2].set_title(f'Terminal Value fn')
     axes[2].set_xlabel('X')
-    axes[2].set_xlabel('X dot')
+    axes[2].set_ylabel('X dot')
     fig.colorbar(ctr_ra, ax=axes[2])
 
     plt.savefig(save_plot_name)
