@@ -91,11 +91,16 @@ class AnalyticalTerminalDataset(Dataset):
         self.n = env.n
         self.m = env.m
         #Sampling both x and u
-        len = env.n + env.m
-        low = np.append(env.low, env.u_min)
-        high = np.append(env.high, env.u_max)
+        # len = env.n + env.m
+        # low = np.append(env.low, env.u_min)
+        # high = np.append(env.high, env.u_max)
 
-        self.x_u = np.random.uniform(low=low, high=high, size=(self.num_samples, len))
+        # self.x_u = np.random.uniform(low=low, high=high, size=(self.num_samples, len))
+
+        x_sample = env.sample_initial_state(self.num_samples)
+        u_sample = np.random.uniform(low=env.u_min, high=env.u_max, size=(self.num_samples, env.m))
+
+        self.x_u = np.concatenate([x_sample, u_sample], axis=-1)
 
         self.lx = torch.from_numpy(env.target_margin(self.x_u[:, :env.n])).float()
         self.gx = torch.from_numpy(env.safety_margin(self.x_u[:, :env.n])).float()

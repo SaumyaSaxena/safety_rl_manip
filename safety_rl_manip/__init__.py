@@ -54,3 +54,8 @@ register(
     id="slide_pickup_mujoco_env-v0",
     entry_point="safety_rl_manip.envs:SlidePickupMujocoEnv"
 )
+
+register(
+    id="slide_pickup_obstacles_mujoco_env-v0",
+    entry_point="safety_rl_manip.envs:SlidePickupObstaclesMujocoEnv"
+)

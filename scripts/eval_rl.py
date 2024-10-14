@@ -40,6 +40,10 @@ def main():
     env_name = ckpt['env_name']
     mode = ckpt['train_cfg']['mode']
     algo_name = ckpt['train_cfg']['algo_name']
+
+    if 'run_variant' in ckpt['train_cfg']:
+        time_str = time_str + '_' + ckpt['train_cfg']['run_variant']
+
     eval_path = os.path.join(eval_path, f'{env_name}_{algo_name}_{mode}', time_str)
 
     agent = eval(algo_name)(

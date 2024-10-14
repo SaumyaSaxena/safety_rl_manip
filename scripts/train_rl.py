@@ -15,9 +15,10 @@ from safety_rl_manip.models.RARL.SAC import SAC
 
 logger = logging.getLogger(__name__)
 
-@hydra.main(config_path='../cfg/', config_name='train_pickup_slide_mujoco_ddpg.yaml')
-# @hydra.main(config_path='cfg/', config_name='train_point_mass_cont_ddpg.yaml')
-# @hydra.main(config_path='cfg/', config_name='train_point_mass_cont_sac.yaml')
+# @hydra.main(config_path='../cfg/', config_name='train_pickup_slide_mujoco_ddpg.yaml')
+@hydra.main(config_path='../cfg/', config_name='train_pickup_slide_obstacles_mujoco_ddpg.yaml')
+# @hydra.main(config_path='../cfg/', config_name='train_point_mass_cont_ddpg.yaml')
+# @hydra.main(config_path='../cfg/', config_name='train_point_mass_cont_sac.yaml')
 def main(cfg):
     
     hydra_dir = Path(os.getcwd())
@@ -47,11 +48,21 @@ def main(cfg):
         outFolder=hydra_dir, debug=cfg.debug
     )
 
+    # Load checkpoint
+    ckpt = None
+    if train_cfg.resume_from_ckpt:
+        ckpt_file = wandb.restore(
+            str(train_cfg.wandb_load.file), 
+            run_path=train_cfg.wandb_load.run_path,
+            root=str(hydra_dir), replace=True,
+        )
+        ckpt = torch.load(ckpt_file.name, map_location=device)
+
     step=0
     if train_cfg.warmup:
         step = agent.initQ()
     
-    agent.learn(step)
+    agent.learn(step, ckpt)
 
 if __name__ == "__main__":
     main()

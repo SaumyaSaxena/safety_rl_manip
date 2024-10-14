@@ -1,11 +1,11 @@
 debug: False
-gpu: 1
+gpu: 0
 seed: 0
 tag: ${now:%Y-%m-%d-%H-%M-%S}
-run_name: "train_DDPG_point_mass_${train_cfg.mode}" 
+run_name: "train_DDPG_pickup_slide_obstacles_mujoco_${train_cfg.mode}" 
 # variant: ${train_cfg.warmup_cfg.warmup_type}_UpdatePiType_${train_cfg.warmup_cfg.warmupQ_expert.update_pi_type}
 # variant: 'no_terminal_gammaSch150_lrSch'
-variant: 'sample_in_obs'
+variant: 'no_sch_gamma'
 
 hydra:
   run:
@@ -13,9 +13,8 @@ hydra:
   job:
     chdir: True
 
-
 defaults:
-  - /envs: gym_envs.yaml
+  - /envs: mujoco_envs.yaml
   - _self_
 
 wandb:
@@ -25,15 +24,16 @@ wandb:
   name: ${run_name}_${variant}
 wandb_resume_id: null
 
-env_name: "point_mass_1D_cont_env-v0"
+env_name: "slide_pickup_obstacles_mujoco_env-v0"
 envs:
-  point_mass_1D_cont_env-v0:
+  slide_pickup_obstacles_mujoco_env-v0:
     doneType: 'all'
     return_type: 'reward'
     mode: ${train_cfg.mode}
     costType: 'max_ell_g'
 
 train_cfg:
+  run_variant: ${variant}
   algo_name: DDPG
   warmup: False
   warmup_cfg:
@@ -57,11 +57,12 @@ train_cfg:
   mode: 'RA' # RA, lagrange
   seed: ${seed}
   steps_per_epoch: 4000
-  epochs: 200
+  epochs: 400
   replay_size: 1e+6
   gamma: 0.99
-  schedule_gamma: True
+  schedule_gamma: False
   gamma_warmup_epochs: 150
+  scale_q_loss: 1000.0
   polyak: 0.995
   pi_lr: 1e-3 
   q_lr: 1e-3
@@ -90,11 +91,16 @@ train_cfg:
   save_top_k: 5
   ac_kwargs:
     hidden_sizes: [256,256]
-  
+  resume_from_ckpt: False
+  wandb_load:
+    run_path: iam-lab/safety_rl_manip/cxrjqc41 # iam-lab/safety_rl_manip/lxqxti1m
+    file: model/step_1591999_test_return_-2.19.pth # model/step_1207999_test_return_-2.37.pth
+
+
 eval_cfg:
   seed: ${seed}
   eval_value_fn: True
-  test_value_fn: True
+  test_value_fn: False
   num_test_episodes: 200
   eval_safe_rollouts: True
   num_eval_episodes: 5000

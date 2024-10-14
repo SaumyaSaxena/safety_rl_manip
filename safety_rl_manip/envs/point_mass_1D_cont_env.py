@@ -14,11 +14,12 @@ class PointMass1DContEnv(gym.Env):
 
     self.env_cfg = cfg
 
-    self.n = 2
-    self.m = 1
+    self.n = 4
+    self.m = 2
     self.dt = cfg.dt
     self.mode = cfg.mode
     self.sample_inside_obs = cfg.sample_inside_obs
+    self.epoch = 0
 
     self.task = cfg.task
     self.goal = (self.env_cfg.target_set.high[0] + self.env_cfg.target_set.low[0])/2
@@ -393,9 +394,3 @@ class PointMass1DContEnv(gym.Env):
     t_series = outputs['t_series']
 
     return value_fn, grid_x, target_T, obstacle_T
-    
-    
-
-    
-
-    

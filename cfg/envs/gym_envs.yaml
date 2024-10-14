@@ -65,6 +65,7 @@ point_mass_1D_cont_env-v0:
   mode: 'lagrange'
   doneType: 'toEnd'
   sample_inside_obs: True
+  is_GT_value: True
 
 slide_pickup_box2d_env-v0:
   gravity: [0.0, -9.8]

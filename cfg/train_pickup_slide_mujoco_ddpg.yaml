@@ -1,11 +1,11 @@
 debug: False
 gpu: 0
-seed: 0
+seed: 58
 tag: ${now:%Y-%m-%d-%H-%M-%S}
 run_name: "train_DDPG_pickup_slide_mujoco_${train_cfg.mode}" 
 # variant: ${train_cfg.warmup_cfg.warmup_type}_UpdatePiType_${train_cfg.warmup_cfg.warmupQ_expert.update_pi_type}
 # variant: 'no_terminal_gammaSch150_lrSch'
-variant: '005_z'
+variant: 'no_gamma_sch_Fail_easy_target_pretrained_scaleQloss'
 
 hydra:
   run:
@@ -31,6 +31,7 @@ envs:
     return_type: 'reward'
     mode: ${train_cfg.mode}
     costType: 'max_ell_g'
+    epochs: ${train_cfg.epochs}
 
 train_cfg:
   algo_name: DDPG
@@ -40,7 +41,7 @@ train_cfg:
     num_epochs: 60
     warmup_q_lr: 1e-3
     warmup_pi_lr: 1e-3
-    warmup_type: 'warmup_pi' # 'warmupQ_terminal_all_states', 'warmupQ_expert', 'warmup_pi'
+    warmup_type: 'warmupQ_terminal_all_states' # 'warmupQ_terminal_all_states', 'warmupQ_expert', 'warmup_pi'
     warmupQ_terminal_all_states:
       num_terminal_samples: 1e+4
     warmupQ_expert:
@@ -56,13 +57,14 @@ train_cfg:
   mode: 'lagrange' # RA, lagrange
   seed: ${seed}
   steps_per_epoch: 4000
-  epochs: 200
+  epochs: 400
   replay_size: 1e+6
   gamma: 0.99
-  schedule_gamma: True
-  gamma_warmup_epochs: 150
+  schedule_gamma: False
+  gamma_warmup_epochs: 350
+  scale_q_loss: 1000.0
   polyak: 0.995
-  pi_lr: 1e-3 
+  pi_lr: 1e-3
   q_lr: 1e-3
   AdamW:
     eps: 1.0e-8
@@ -82,16 +84,22 @@ train_cfg:
   act_noise: 0.1
   schedule_noise: False
   noise_decay: 0.985
-  num_test_episodes: 20
-  max_ep_len: 300
+  max_ep_len: 200
   model_save_freq: 2
   plot_save_freq: 10
   save_top_k: 5
   ac_kwargs:
     hidden_sizes: [256,256]
+  resume_from_ckpt: True
+  wandb_load:
+    run_path: iam-lab/safety_rl_manip/cxrjqc41 # iam-lab/safety_rl_manip/lxqxti1m
+    file: model/step_1591999_test_return_-2.19.pth # model/step_1207999_test_return_-2.37.pth
   
 eval_cfg:
-  eval_value_fn: False
+  seed: ${seed}
+  eval_value_fn: True
+  test_value_fn: False
+  num_test_episodes: 200
   eval_safe_rollouts: True
-  num_rollouts: 200
+  num_eval_episodes: 5000
   save_rollout_gifs: True  

@@ -23,3 +23,5 @@ from .pickup_1D_env import Pickup1DEnv
 from .point_mass_1D_cont_env import PointMass1DContEnv
 
 from .slide_pickup_noRobot_mujoco import SlidePickupMujocoEnv
+
+from .slide_pickup_obstacles_noRobot_mujoco import SlidePickupObstaclesMujocoEnv

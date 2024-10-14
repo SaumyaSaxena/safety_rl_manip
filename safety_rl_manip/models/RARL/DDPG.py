@@ -124,7 +124,6 @@ class DDPG(torch.nn.Module):
         self.update_every = train_cfg.update_every
         self.act_noise = train_cfg.act_noise
         self.noise_decay = train_cfg.get('noise_decay', 1.)
-        self.num_test_episodes = train_cfg.num_test_episodes
         self.max_ep_len = train_cfg.max_ep_len
         self.model_save_freq = train_cfg.model_save_freq
         self.plot_save_freq = train_cfg.plot_save_freq
@@ -413,7 +412,7 @@ class DDPG(torch.nn.Module):
                 backup = r + self.gamma * (1 - d) * q_pi_targ
 
         # MSE loss against Bellman backup
-        loss_q = ((q - backup)**2).mean()
+        loss_q = self.train_cfg.scale_q_loss * ((q - backup)**2).mean()
 
         # Useful info for logging
         loss_info = dict(QVals=q.detach().cpu().numpy())
@@ -466,24 +465,13 @@ class DDPG(torch.nn.Module):
         return np.clip(a, self.env.action_space.low, self.env.action_space.high)
 
     def test_agent(self, epoch):
-        avg_test_return, avg_test_ep_len = 0. , 0.
-        for j in range(self.num_test_episodes):
-            o, d, ep_ret, ep_len = self.test_env.reset(), False, 0, 0
-            while not(d or (ep_len == self.max_ep_len)):
-                # Take deterministic actions at test time (noise_scale=0)
-                o, r, d, _ = self.test_env.step(self.get_action(o, 0))
-                ep_ret += r
-                ep_len += 1
-            avg_test_return += ep_ret
-            avg_test_ep_len += ep_len
-        avg_test_return = avg_test_return/self.num_test_episodes
-        avg_test_ep_len = avg_test_ep_len/self.num_test_episodes
 
+        test_info = self.rollout_episodes(self.eval_cfg.num_test_episodes)
         # Plot learned value function and overlay trajs on it
         if (epoch % self.plot_save_freq == 0):
             trajs=[]
             # trajs = self.do_visualization_rollouts(save_rollout_gifs=self.eval_cfg.save_rollout_gifs)
-            if self.eval_cfg.eval_value_fn:
+            if self.eval_cfg.test_value_fn:
                 # Plot value function
                 v = self.get_value_fn()
                 self.test_env.plot_value_fn(v.detach().cpu().numpy(),
@@ -494,9 +482,60 @@ class DDPG(torch.nn.Module):
                     save_dir=self.figureFolder, 
                     name=f'epoch_{epoch}')
 
-        return avg_test_return, avg_test_ep_len
+        return test_info
 
-    def learn(self, start_step=0):
+    def rollout_episodes(self, num_episodes):
+        FP, FN, TP, TN, num_pred_success, num_gt_success = 0, 0, 0, 0, 0, 0
+        avg_return, avg_ep_len = 0. , 0.
+        for i in range(num_episodes):
+            o, d, ep_ret, ep_len = self.test_env.reset(), False, 0, 0
+
+            pred_v = self.ac_targ.q(
+                torch.from_numpy(o).float().to(self.device), 
+                self.ac_targ.pi(torch.from_numpy(o).float().to(self.device))).detach().cpu().numpy()
+            pred_success = pred_v > 0.
+            
+            gt_success = False
+            while not(d or (ep_len == self.max_ep_len)):
+                o, r, d, _ = self.test_env.step(self.get_action(o, 0))
+                ep_ret += r
+                fail, _ = self.test_env.check_failure(o.reshape(1,self.test_env.n))
+                succ, _ = self.test_env.check_success(o.reshape(1,self.test_env.n))
+                gt_success = np.logical_or(np.logical_and(not fail[0], succ[0]), gt_success)
+                ep_len += 1
+            avg_return += ep_ret
+            avg_ep_len += ep_len
+            num_pred_success += pred_success
+            num_gt_success += gt_success
+
+            FP += np.sum(np.logical_and((gt_success == False), (pred_success == True)))
+            FN += np.sum(np.logical_and((gt_success == True), (pred_success == False)))
+            TP += np.sum(np.logical_and((gt_success == True), (pred_success == True)))
+            TN += np.sum(np.logical_and((gt_success == False), (pred_success == False)))
+        false_pos_rate = FP/(FP+TN)
+        false_neg_rate = FN/(FN+TP)
+        avg_return = avg_return/num_episodes
+        avg_ep_len = avg_ep_len/num_episodes
+
+        info = {
+            'Average_return': avg_return,
+            'Average_episode_len': avg_ep_len,
+            'False_positive_rate': false_pos_rate,
+            'False_negative_rate': false_neg_rate,
+            'Total_num_episodes': float(num_episodes),
+            'FP': float(FP),
+            'FN': float(FN),
+            'TP': float(TP),
+            'TN': float(TN),
+            'num_pred_success': float(num_pred_success),
+            'num_gt_success': float(num_gt_success),
+        }
+        return info
+
+    def learn(self, start_step=0, ckpt=None):
+        if ckpt is not None:
+            self.load_state_dict(ckpt["state_dict"])
+
         if self.train_cfg.add_expert_to_buffer:
             self.add_expert_to_buffer()
 
@@ -510,6 +549,9 @@ class DDPG(torch.nn.Module):
         epoch=0
         for t in trange(start_step, total_steps):
             # torch.cuda.empty_cache()
+            self.env.epoch = epoch
+            self.test_env.epoch = epoch
+
             if not self.debug:
                 log_dict = {}
             
@@ -568,8 +610,9 @@ class DDPG(torch.nn.Module):
 
                 # Test the performance of the deterministic version of the agent.
                 print(f"Testing at epoch: {epoch}")
-                avg_test_return, avg_test_ep_len = self.test_agent(epoch)
-                
+                test_info = self.test_agent(epoch)
+                avg_test_return = test_info['Average_return']
+
                 # Save model
                 if (epoch % self.model_save_freq == 0) or (epoch == self.epochs):
                     print(f"Saving model at epoch: {epoch}")
@@ -595,8 +638,9 @@ class DDPG(torch.nn.Module):
                         log_dict.update({f'Epoch': epoch})
                         log_dict.update({f'gamma': self.gamma})
                         log_dict.update({f'act_noise': self.act_noise})
-                        log_dict.update({f'Avg Test Return': avg_test_return})
-                        log_dict.update({f'Avg Test Episode len': avg_test_ep_len})
+
+                        log_dict.update(test_info)
+
                         log_dict.update({f'Time': time.time()-start_time})
                         log_dict.update({'optim/q_lr': self.q_optimizer.param_groups[0]['lr']})
                         log_dict.update({'optim/pi_lr': self.pi_optimizer.param_groups[0]['lr']})
@@ -624,11 +668,20 @@ class DDPG(torch.nn.Module):
             o, d, ep_ret, ep_len = self.test_env.reset(init_s), False, 0, 0
             rollout.append(o)
 
+            pred_v = self.ac_targ.q(
+                torch.from_numpy(o).float().to(self.device), 
+                self.ac_targ.pi(torch.from_numpy(o).float().to(self.device))).detach().cpu().numpy()
+            pred_success = pred_v > 0.
+            gt_success = False
+
             while not(d or (ep_len == self.max_ep_len)):
                 # Take deterministic actions at test time (noise_scale=0)
                 at = self.get_action(o, 0)
                 o, r, d, _ = self.test_env.step(at)
-
+                fail, _ = self.test_env.check_failure(o.reshape(1,self.test_env.n))
+                succ, _ = self.test_env.check_success(o.reshape(1,self.test_env.n))
+                gt_success = np.logical_or(np.logical_and(not fail[0], succ[0]), gt_success)
+                
                 at_all.append(at)
                 rollout.append(o)
                 if save_rollout_gifs:
@@ -638,9 +691,10 @@ class DDPG(torch.nn.Module):
                 ep_len += 1
             trajs.append(np.array(rollout))
             if save_rollout_gifs:
-                imageio.mimsave(os.path.join(self.figureFolder, f'eval_traj_{len(trajs)}.gif'), 
+                file_name = f'eval_traj_{self.mode}_{len(trajs)}_pred_succ_{pred_success}_gt_succ_{gt_success}'
+                imageio.mimsave(os.path.join(self.figureFolder, f'{file_name}.gif'), 
                     imgs, duration=ep_len*self.test_env.dt)
-                self.test_env.plot_trajectory(np.stack(rollout,axis=0), np.stack(at_all,axis=0), os.path.join(self.figureFolder, f'eval_traj_{len(trajs)}.png'))
+                self.test_env.plot_trajectory(np.stack(rollout,axis=0), np.stack(at_all,axis=0), os.path.join(self.figureFolder, f'{file_name}.png'))
         return trajs
 
     def eval(self, ckpt=None, eval_cfg=None, debug=True):
@@ -649,11 +703,14 @@ class DDPG(torch.nn.Module):
         if eval_cfg is None:
             eval_cfg = self.eval_cfg
 
+        self.env.epoch = self.epochs-1
+        self.test_env.epoch = self.epochs-1
+
         set_seed(eval_cfg.seed)
         trajs = self.do_visualization_rollouts(save_rollout_gifs=eval_cfg.save_rollout_gifs)
 
         if eval_cfg.eval_value_fn:
-            if self.env_cfg.get('is_GT_value', False): # TODO(saumya): fix this
+            if self.env_cfg.is_GT_value:
                 GT_value_fn, GT_grid_x, GT_target_T, GT_obstacle_T = self.test_env.get_GT_value_fn()
                 GT_value_fn_flat = GT_value_fn.flatten()
                 GT_grid_flat = torch.from_numpy(GT_grid_x.reshape(-1, GT_grid_x.shape[-1])).float().to(self.device)
@@ -678,8 +735,7 @@ class DDPG(torch.nn.Module):
                 save_dir=self.figureFolder,
                 name=f'Pred_value_fn_inf_horizon',
                 debug=debug)
-
-            if self.env_cfg.get('is_GT_value', False): # TODO(saumya): fix this
+            if self.env_cfg.is_GT_value:
                 false_pos_rate, false_neg_rate = calc_false_pos_neg_rate(pred_value_fn_flat, GT_value_fn_flat)
                             # Save results
                 results = {
@@ -705,47 +761,14 @@ class DDPG(torch.nn.Module):
             print(f"Saving predicted and GT value fn plots to: {str(self.figureFolder)}")
         
         if eval_cfg.eval_safe_rollouts:
-            FP, FN, TP, TN, num_pred_success, num_gt_success = 0, 0, 0, 0, 0, 0
-            for i in range(eval_cfg.num_rollouts):
-                o, d, ep_ret, ep_len = self.test_env.reset(), False, 0, 0
-                pred_v = self.ac_targ.q(
-                    torch.from_numpy(o).float().to(self.device), 
-                    self.ac_targ.pi(torch.from_numpy(o).float().to(self.device))).detach().cpu().numpy()
-                pred_success = pred_v > 0.
-                
-                gt_success = False
-                while not(d or (ep_len == self.max_ep_len)):
-                    o, r, d, _ = self.test_env.step(self.get_action(o, 0))
-                    fail, _ = self.test_env.check_failure(o.reshape(1,self.test_env.n))
-                    succ, _ = self.test_env.check_success(o.reshape(1,self.test_env.n))
-                    gt_success = np.logical_or(np.logical_and(not fail[0], succ[0]), gt_success)
-                    ep_len += 1
-                
-                num_pred_success += pred_success
-                num_gt_success += gt_success
-                FP += np.sum(np.logical_and((gt_success == False), (pred_success == True)))
-                FN += np.sum(np.logical_and((gt_success == True), (pred_success == False)))
-                TP += np.sum(np.logical_and((gt_success == True), (pred_success == True)))
-                TN += np.sum(np.logical_and((gt_success == False), (pred_success == False)))
-            false_pos_rate = FP/(FP+TN)
-            false_neg_rate = FN/(FN+TP)
+            eval_results = self.rollout_episodes(eval_cfg.num_eval_episodes)
             
-            # Save results
-            results = {
-                'false_pos_rate': false_pos_rate,
-                'false_neg_rate': false_neg_rate,
-                'total_num_rollouts': float(self.train_cfg.get('eval_num_rollouts', 5000)),
-                'FP': float(FP),
-                'FN': float(FN),
-                'TP': float(TP),
-                'TN': float(TN),
-                'num_pred_success': float(num_pred_success),
-                'num_gt_success': float(num_gt_success),
-            }
             fname = os.path.join(self.outFolder, 'results_rollouts.json')
             with open(fname, "w") as f:
-                json.dump(results, f, indent=4)
+                json.dump(eval_results, f, indent=4)
 
+            false_pos_rate = eval_results['False_positive_rate']
+            false_neg_rate = eval_results['False_negative_rate']
             print(f"Saving rollouts FPR={false_pos_rate}; FNR={false_neg_rate} results to: {str(fname)}")
 
         if not debug:

@@ -12,10 +12,16 @@ slide_pickup_mujoco_env-v0:
   block_bottom:
     mass: 0.5
     initial_pos: [0.0, 0.6]
-    size: [0.1, 0.1, 0.03]
+    size: [0.1, 0.1, 0.03] # half-dimensions
     rgba: [0, 1, 0, 1]
     friction: 0.2
     restitution: 0.0 # 0.99 bouncy
+    target_set_init:
+      low: [0.25, -5.0, 0.05] # added to initial bottom block state to get target boundary low [-0.3, -0.3, -0.3]
+      high: [5.0, 5.0, 0.5] # added to initial bottom block state to get target boundary high [0.3, 0.3, 0.3]
+    target_set_final:
+      low: [0.25, -5.0, 0.05] # added to initial bottom block state to get target boundary low [-0.1, -0.1, -0.1]
+      high: [5.0, 5.0, 0.5] # added to initial bottom block state to get target boundary high [0.1, 0.1, 0.1]
     state_ranges: # x, y
       low: [-0.4, 0.35] 
       high: [0.4, 0.85]
@@ -23,21 +29,103 @@ slide_pickup_mujoco_env-v0:
   block_top:
     mass: 0.5
     initial_pos: [0.0, 0.6]
-    size: [0.1, 0.1, 0.03]
+    size: [0.1, 0.1, 0.03] # half-dimensions
+    rgba: [1, 0, 0, 1]
+    friction: 0.2
+    restitution: 0.0
+    safety_set_init:
+      low: [-0.3, -0.3, -20.0] # added to initial block state to get safety boundary
+      high: [0.3, 0.3, 0.3] # added to initial block state to get safety boundary
+    safety_set_final:
+      low: [-0.2, -0.2, -2.0] # added to initial block state to get safety boundary [-0.1, -0.1, -20.0]
+      high: [0.2, 0.2, 0.05] # added to initial block state to get safety boundary [0.1, 0.1, 0.03]
+    N_x: [50, 50]
+    state_ranges: # x, y
+      low: [-0.4, 0.35] # same as block_bottom 0.35
+      high: [0.4, 0.85] # same as block_bottom  0.85
+  penalty: 10.
+  reward: -10.
+  costType: 'max_ell_g'
+  scaling_target: 1.0
+  scaling_safety: 1.0
+  return_type: 'reward'
+  mode: 'lagrange'
+  doneType: 'all'
+  is_GT_value: False
+  epochs: 400
+  scheduling_sets:
+    schedule_safe_set: False
+    schedule_target_set: False
+    safe_set_warmup_epochs_ratio: 0.75
+    target_set_warmup_epochs_ratio: 0.75
+
+
+slide_pickup_obstacles_mujoco_env-v0:
+  frame_skip: 5
+  img_size: [256, 256]
+  goal: [0.6, 0.6, 0.5]
+  thresh: 0.01
+  control_low: [-100.,-100.,-100.]
+  control_high: [100.,100.,100.]
+  num_eval_trajs: 20
+  env_bounds:
+    low: [-0.69, 0.2, -0.2] #table bounds : table center is [0., 0.6]
+    high: [0.69, 0.99, 1.0] #table bounds
+  block_bottom:
+    mass: 0.5
+    initial_pos: [0.0, 0.6]
+    size: [0.1, 0.1, 0.03] # half-dimensions
+    rgba: [0, 1, 0, 1]
+    friction: 0.2
+    restitution: 0.0 # 0.99 bouncy
+    target_set:
+      low: [0.25, -0.3, -0.5] # added to initial bottom block state to get target boundary low [-0.1, -0.1, -0.1]
+      high: [5.0, 0.3, 0.5] # added to initial bottom block state to get target boundary high [0.1, 0.1, 0.1]
+    state_ranges: # x, y
+      low: [-0.25, 0.45] 
+      high: [0.25, 0.75]
+    N_x: [50, 50]
+  block_top:
+    mass: 0.5
+    initial_pos: [0.0, 0.6]
+    size: [0.1, 0.1, 0.03] # half-dimensions
     rgba: [1, 0, 0, 1]
     friction: 0.2
     restitution: 0.0
     safety_set:
-      low: [0.3, 0.3, 0.05] # subtracted from initial block state to get safety boundary
-      high: [0.3, 0.3, 0.05] # added to initial block state to get safety boundary
+      low: [-0.2, -0.2, -0.05] # added from initial block state to get safety boundary
+      high: [0.2, 0.2, 0.05] # added to initial block state to get safety boundary
     N_x: [50, 50]
     state_ranges: # x, y
-      low: [-0.4, 0.6] # same as block_bottom
-      high: [0.4, 0.6] # same as block_bottom
+      low: [-0.25, 0.45] # same as block_bottom
+      high: [0.25, 0.75] # same as block_bottom
+  block_obsA:
+    mass: 0.5
+    initial_pos: [-0.25, 0.6]
+    size: [0.03, 0.03, 0.03]
+    rgba: [1, 1, 1, 1]
+    friction: 0.2
+    restitution: 0.0 # 0.99 bouncy
+    state_ranges: # x, y
+      low: [-0.05, -0.18] # relative to block bottom
+      high: [0.05, -0.28] # relative to block bottom
+    N_x: [50, 50]
+  block_obsB:
+    mass: 0.5
+    initial_pos: [0.25, 0.6]
+    size: [0.03, 0.03, 0.03]
+    rgba: [0, 0, 0, 1]
+    friction: 0.2
+    restitution: 0.0 # 0.99 bouncy
+    state_ranges: # x, y 
+      low: [0.43, -0.05] # relative to block bottom [0.43, -0.05]
+      high: [0.53, 0.05] # relative to block bottom [0.53, 0.05]
+    N_x: [50, 50]
   penalty: 10.
   reward: -10.
   costType: 'max_ell_g'
-  scaling: 1.0
+  scaling_target: 1.0
+  scaling_safety: 1.0
   return_type: 'reward'
   mode: 'lagrange'
   doneType: 'all'
