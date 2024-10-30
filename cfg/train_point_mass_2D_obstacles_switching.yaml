@@ -2,10 +2,10 @@ debug: False
 gpu: 0
 seed: 0
 tag: ${now:%Y-%m-%d-%H-%M-%S}
-run_name: "train_DDPG_pickup_slide_obstacles_mujoco_${train_cfg.mode}" 
+run_name: "train_DDPG_point_mass_2D_obstacles_switching_${train_cfg.mode}" 
 # variant: ${train_cfg.warmup_cfg.warmup_type}_UpdatePiType_${train_cfg.warmup_cfg.warmupQ_expert.update_pi_type}
 # variant: 'no_terminal_gammaSch150_lrSch'
-variant: 'no_sch_gamma'
+variant: 'noSample_obs'
 
 hydra:
   run:
@@ -14,28 +14,27 @@ hydra:
     chdir: True
 
 defaults:
-  - /envs: mujoco_envs.yaml
+  - /envs: gym_envs.yaml
   - _self_
 
 wandb:
   entity: iam-lab
-  group: drabe/DDPG
+  group: drabe/DDPG_switching
   project: safety_rl_manip
   name: ${run_name}_${variant}
 wandb_resume_id: null
 
-env_name: "slide_pickup_obstacles_mujoco_env-v0"
+env_name: "point_mass_2D_obstacles_env-v0"
 envs:
-  slide_pickup_obstacles_mujoco_env-v0:
+  point_mass_2D_obstacles_env-v0:
     doneType: 'all'
     return_type: 'reward'
     mode: ${train_cfg.mode}
     costType: 'max_ell_g'
-    epochs: ${train_cfg.epochs}
 
 train_cfg:
   run_variant: ${variant}
-  algo_name: DDPG
+  algo_name: DDPGSwitching
   warmup: False
   warmup_cfg:
     batch_size: 200
@@ -105,4 +104,4 @@ eval_cfg:
   num_test_episodes: 200
   eval_safe_rollouts: True
   num_eval_episodes: 5000
-  save_rollout_gifs: True  
+  save_rollout_gifs: False  

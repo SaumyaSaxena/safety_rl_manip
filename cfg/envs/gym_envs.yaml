@@ -67,6 +67,48 @@ point_mass_1D_cont_env-v0:
   sample_inside_obs: True
   is_GT_value: True
 
+point_mass_2D_obstacles_env-v0:
+  task: 'goto_goal'  # 'goto_goal_obstacle', 'goto_goal'
+  dt: 0.01
+  goal: [4.0, 0.] # x, y
+  thresh: 0.1
+  control_low: [-1., -1.]
+  control_high: [1., 1.]
+  max_samples: 100
+  env_bounds:
+    low: [-5.0, -5.0, -5.0, -5.0]
+    high: [5.0, 5.0, 5.0, 5.0]
+  gripper: 
+    initial_pos: [-1.0, 0.0]
+    size: [0.1, 0.1] # half-dimensions
+    state_ranges:
+      low: [-5.0, -5.0, -5.0, -5.0] # x, y, xdot, ydot
+      high: [5.0, 5.0, 5.0, 5.0]
+  obstacle1:
+    initial_pos: [-4.0, 0.0]
+    size: [0.5, 1.0] # half-dimensions
+    state_ranges:
+      low: [-4.0, 0.0, 0.0, 0.0] # x, y, xdot, ydot
+      high: [-4.0, 0.0, 0.0, 0.0]
+  obstacle2:
+    initial_pos: [2.0, 0.0]
+    size: [0.5, 1.05] # half-dimensions
+    state_ranges:
+      low: [2.0, 0.0, 0.0, 0.0] # x, y, xdot, ydot
+      high: [2.0, 0.0, 0.0, 0.0]
+  N_x: [101, 101] # for gripper
+  N_u: [51, 51]
+  penalty: 10.
+  reward: -10.
+  costType: 'dense'
+  scaling_target: 1.0
+  scaling_safety: 1.0
+  return_type: 'cost'
+  mode: 'lagrange'
+  doneType: 'toEnd'
+  is_GT_value: False
+  num_eval_trajs: 20
+
 slide_pickup_box2d_env-v0:
   gravity: [0.0, -9.8]
   T: 2.0

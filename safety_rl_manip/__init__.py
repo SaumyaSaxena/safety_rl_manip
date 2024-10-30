@@ -51,6 +51,11 @@ register(
 )
 
 register(
+    id="point_mass_2D_obstacles_env-v0",
+    entry_point="safety_rl_manip.envs:PointMass2DObstacles"
+)
+
+register(
     id="slide_pickup_mujoco_env-v0",
     entry_point="safety_rl_manip.envs:SlidePickupMujocoEnv"
 )

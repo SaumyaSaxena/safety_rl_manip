@@ -187,3 +187,15 @@ class ReplayBuffer:
                   lx=self.lx_buf[idxs],
                   gx=self.gx_buf[idxs])
     return {k: torch.as_tensor(v, dtype=torch.float32).to(self.device) for k,v in batch.items()}
+
+class ReplayBufferSwitching(ReplayBuffer):
+  """
+  FIFO experience replay buffer for DDPG switching agents.
+  """
+  def __init__(self, obs_dim, act_dim, n_modes, size, device):
+    super().__init__(obs_dim, act_dim, size, device)
+
+    self.rew_buf = np.zeros(combined_shape(size, n_modes), dtype=np.float32)
+    self.done_buf = np.zeros(combined_shape(size, n_modes), dtype=np.float32)
+    self.lx_buf = np.zeros(combined_shape(size, n_modes), dtype=np.float32)
+    self.gx_buf = np.zeros(combined_shape(size, n_modes), dtype=np.float32)

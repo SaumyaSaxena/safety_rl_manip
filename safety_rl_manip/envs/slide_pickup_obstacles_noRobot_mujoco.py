@@ -11,7 +11,7 @@ from robosuite.models.arenas import MultiTaskNoWallsArena
 import mujoco
 
 from robosuite.models.objects.primitive.box import BoxObject
-from safety_rl_manip.envs.utils import create_grid
+from safety_rl_manip.envs.utils import create_grid, signed_dist_fn_rectangle
 
 import torch
 import wandb
@@ -41,6 +41,9 @@ class SlidePickupObstaclesMujocoEnv(gym.Env, EzPickle):
             np.inf*np.ones(self.n)
         )
         
+        self.block_obsA_active  = self.env_cfg.block_obsA.active
+        self.block_obsB_active  = self.env_cfg.block_obsB.active
+
         self.reward = self.env_cfg.reward
         self.penalty = self.env_cfg.penalty
         self.doneType = self.env_cfg.doneType
@@ -52,7 +55,7 @@ class SlidePickupObstaclesMujocoEnv(gym.Env, EzPickle):
         self.renderer = mujoco.Renderer(self.model, self.env_cfg.img_size[0], self.env_cfg.img_size[1])
         
         # Visualization Parameters
-        self.visual_initial_states = self.sample_initial_state(self.env_cfg.get('num_eval_trajs', 20))
+        self.visual_initial_states = self.sample_initial_state(self.env_cfg.get('num_eval_trajs', 20)) # samples n_all
 
         # Will visualize the value function in x-y only for initial positions of bottom block
         self.N_x = self.env_cfg.block_bottom.N_x
@@ -78,14 +81,22 @@ class SlidePickupObstaclesMujocoEnv(gym.Env, EzPickle):
         
         distA = np.linalg.norm(self.grid_x-xy_sample_obsA, axis=-1)
         distB = np.linalg.norm(self.grid_x-xy_sample_obsB, axis=-1)
-
-        relevantA_idx = distA < distB
-        relevant_obs_xy = xy_sample_obsB.copy()
-        relevant_obs_xy[relevantA_idx] = xy_sample_obsA[relevantA_idx]
-        rel_obs_z = self.block_obsB_z*np.ones((*self.N_x,1))
-        rel_obs_z[relevantA_idx] = self.block_obsA_z
-
-        relevant_obs = np.concatenate([relevant_obs_xy, rel_obs_z, np.zeros((*self.N_x,3))], axis=-1)
+        
+        if self.block_obsA_active and self.block_obsB_active:
+            relevantA_idx = distA < distB
+            relevant_obs_xy = xy_sample_obsB.copy()
+            relevant_obs_xy[relevantA_idx] = xy_sample_obsA[relevantA_idx]
+            rel_obs_z = self.block_obsB_z*np.ones((*self.N_x,1))
+            rel_obs_z[relevantA_idx] = self.block_obsA_z
+            relevant_obs = np.concatenate([relevant_obs_xy, rel_obs_z, np.zeros((*self.N_x,3))], axis=-1)
+        elif self.block_obsA_active:
+            rel_obs_z = self.block_obsA_z*np.ones((*self.N_x,1))
+            relevant_obs = np.concatenate([xy_sample_obsA, rel_obs_z, np.zeros((*self.N_x,3))], axis=-1)
+        elif self.block_obsB_active:
+            rel_obs_z = self.block_obsB_z*np.ones((*self.N_x,1))
+            relevant_obs = np.concatenate([xy_sample_obsB, rel_obs_z, np.zeros((*self.N_x,3))], axis=-1)
+        else:
+            raise NotImplementedError("Atleast one of the obstacles should be active!")
         
         self.grid_x = np.concatenate(
             [self.grid_x, # block bottom
@@ -142,20 +153,22 @@ class SlidePickupObstaclesMujocoEnv(gym.Env, EzPickle):
         # TODO(saumya): Variable number of distractors?
 
         # Distractor A
-        block_obsA = BoxObject(name='Block_obsA', size=self.env_cfg.block_obsA.size, rgba=self.env_cfg.block_obsA.rgba)
-        block_obsA_body = block_obsA.get_obj()
-        self.block_obsA_z = -block_obsA.bottom_offset[2]
-        block_obsA_body.set('pos', f'{self.env_cfg.block_obsA.initial_pos[0]} {self.env_cfg.block_obsA.initial_pos[1]} {self.block_obsA_z}')
-        world.worldbody.append(block_obsA_body)
-        world.merge_assets(block_obsA)
+        if self.block_obsA_active:
+            block_obsA = BoxObject(name='Block_obsA', size=self.env_cfg.block_obsA.size, rgba=self.env_cfg.block_obsA.rgba)
+            block_obsA_body = block_obsA.get_obj()
+            self.block_obsA_z = -block_obsA.bottom_offset[2]
+            block_obsA_body.set('pos', f'{self.env_cfg.block_obsA.initial_pos[0]} {self.env_cfg.block_obsA.initial_pos[1]} {self.block_obsA_z}')
+            world.worldbody.append(block_obsA_body)
+            world.merge_assets(block_obsA)
 
         # Distractor B
-        block_obsB = BoxObject(name='Block_obsB', size=self.env_cfg.block_obsB.size, rgba=self.env_cfg.block_obsB.rgba)
-        block_obsB_body = block_obsB.get_obj()
-        self.block_obsB_z = -block_obsB.bottom_offset[2]
-        block_obsB_body.set('pos', f'{self.env_cfg.block_obsB.initial_pos[0]} {self.env_cfg.block_obsB.initial_pos[1]} {self.block_obsB_z}')
-        world.worldbody.append(block_obsB_body)
-        world.merge_assets(block_obsB)
+        if self.block_obsB_active:
+            block_obsB = BoxObject(name='Block_obsB', size=self.env_cfg.block_obsB.size, rgba=self.env_cfg.block_obsB.rgba)
+            block_obsB_body = block_obsB.get_obj()
+            self.block_obsB_z = -block_obsB.bottom_offset[2]
+            block_obsB_body.set('pos', f'{self.env_cfg.block_obsB.initial_pos[0]} {self.env_cfg.block_obsB.initial_pos[1]} {self.block_obsB_z}')
+            world.worldbody.append(block_obsB_body)
+            world.merge_assets(block_obsB)
 
         world.root.find('compiler').set('inertiagrouprange', '0 5')
         world.root.find('compiler').set('inertiafromgeom', 'auto')
@@ -195,7 +208,7 @@ class SlidePickupObstaclesMujocoEnv(gym.Env, EzPickle):
         return states
     
     def reset(self, start=None):
-        #start: shape(self.n)
+        # start: shape(self.n)
         self._did_see_sim_exception = False
         mujoco.mj_resetData(self.model, self.data)
 
@@ -207,8 +220,16 @@ class SlidePickupObstaclesMujocoEnv(gym.Env, EzPickle):
 
         self.data.qpos[0:3] = sample_state[0:3] # block_bottom
         self.data.qpos[7:10] = sample_state[6:9] # block_top
-        self.data.qpos[14:17] = sample_state[12:15] # obsA
-        self.data.qpos[21:24] = sample_state[18:21] # obsB
+
+        if self.block_obsA_active and self.block_obsB_active:
+            self.data.qpos[14:17] = sample_state[12:15] # obsA
+            self.data.qpos[21:24] = sample_state[18:21] # obsB
+        elif self.block_obsA_active:
+            self.data.qpos[14:17] = sample_state[12:15] # obsA
+        elif self.block_obsB_active:
+            self.data.qpos[14:17] = sample_state[18:21] # obsB
+        else:
+            raise NotImplementedError("Atleast one of the obstacles should be active!")
 
         mujoco.mj_forward(self.model, self.data)
         curr_state = self.get_current_state()
@@ -297,14 +318,24 @@ class SlidePickupObstaclesMujocoEnv(gym.Env, EzPickle):
 
     def get_current_state(self):
         # Current state contains the obstacle that is closer to block_bottom
-        distA = np.linalg.norm(self.data.qpos[0:2]-self.data.qpos[14:16])
-        distB = np.linalg.norm(self.data.qpos[0:2]-self.data.qpos[21:23])
-        if distA < distB:
+
+        if self.block_obsA_active and self.block_obsB_active:
+            distA = np.linalg.norm(self.data.qpos[0:2]-self.data.qpos[14:16])
+            distB = np.linalg.norm(self.data.qpos[0:2]-self.data.qpos[21:23])
+            if distA < distB:
+                relevant_obs = np.concatenate([self.data.qpos[14:17], self.data.qvel[12:15]])
+                self.relevant_obj = 'block_obsA'
+            else:
+                relevant_obs = np.concatenate([self.data.qpos[21:24], self.data.qvel[18:21]])
+                self.relevant_obj = 'block_obsB'
+        elif self.block_obsA_active:
             relevant_obs = np.concatenate([self.data.qpos[14:17], self.data.qvel[12:15]])
             self.relevant_obj = 'block_obsA'
-        else:
-            relevant_obs = np.concatenate([self.data.qpos[21:24], self.data.qvel[18:21]])
+        elif self.block_obsB_active:
+            relevant_obs = np.concatenate([self.data.qpos[14:17], self.data.qvel[12:15]])
             self.relevant_obj = 'block_obsB'
+        else:
+            raise NotImplementedError("Atleast one of the obstacles should be active!")
         
         return np.concatenate([self.data.qpos[0:3], self.data.qvel[0:3], self.data.qpos[7:10], self.data.qvel[6:9], relevant_obs])
     
@@ -339,11 +370,18 @@ class SlidePickupObstaclesMujocoEnv(gym.Env, EzPickle):
 
         lower_boundary = np.max(self.safety_set_top_low - top_block_pos, axis=-1)
         upper_boundary = np.max(top_block_pos - self.safety_set_top_high, axis=-1)
-        
         top_block_bounds = np.maximum(lower_boundary, upper_boundary)
 
-        collision_dist = np.linalg.norm(self.env_cfg.block_bottom.size[:2]) + np.linalg.norm(self.env_cfg.block_obsA.size[:2])
-        obstacle = (self.env_cfg.thresh + collision_dist) - np.linalg.norm(s[...,:3]-s[...,12:15])
+        # collision_dist = np.linalg.norm(self.env_cfg.block_bottom.size[:2]) + np.linalg.norm(self.env_cfg.block_obsA.size[:2])
+        # obstacle = (self.env_cfg.thresh + collision_dist) - np.linalg.norm(s[...,:3]-s[...,12:15])
+
+        obstacle_high = s[...,12:15] + self.env_cfg.block_bottom.size + self.env_cfg.block_obsA.size
+        obstacle_low = s[...,12:15] - self.env_cfg.block_bottom.size - self.env_cfg.block_obsA.size
+        obstacle = signed_dist_fn_rectangle(
+            s[...,:3], 
+            obstacle_low, 
+            obstacle_high,
+            obstacle=True)
         
         gx = self.scaling_safety * np.maximum(top_block_bounds, obstacle)
 

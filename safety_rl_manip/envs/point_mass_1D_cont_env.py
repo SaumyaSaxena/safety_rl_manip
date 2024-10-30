@@ -17,7 +17,6 @@ class PointMass1DContEnv(gym.Env):
     self.n = 4
     self.m = 2
     self.dt = cfg.dt
-    self.mode = cfg.mode
     self.sample_inside_obs = cfg.sample_inside_obs
     self.epoch = 0
 
@@ -45,9 +44,6 @@ class PointMass1DContEnv(gym.Env):
     self.grid_x_flat = torch.from_numpy(self.grid_x.reshape(-1, self.grid_x.shape[-1])).float().to(self.device)
     self.target_T = self.target_margin(self.grid_x)
     self.obstacle_T = self.safety_margin(self.grid_x)
-    
-    # Time-step Parameters.
-    self.time_step = cfg.dt
 
     # Gym variables.
     self.action_space = gym.spaces.Box(self.u_min, self.u_max)

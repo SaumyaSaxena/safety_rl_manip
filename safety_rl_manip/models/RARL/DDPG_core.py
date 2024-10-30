@@ -5,6 +5,18 @@ import torch
 import torch.nn as nn
 from .utils import mlp
 
+class MLPModePrediction(nn.Module):
+    def __init__(self, obs_dim, 
+            n_modes, 
+            hidden_sizes=(256,256),
+            activation=nn.ReLU,
+        ):
+        super().__init__()
+        pi_sizes = [obs_dim] + list(hidden_sizes) + [n_modes]
+        self.model = mlp(pi_sizes, activation)
+
+    def forward(self, obs):
+        return self.model(obs)
 
 class MLPActor(nn.Module):
 

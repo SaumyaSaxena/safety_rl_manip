@@ -1,7 +1,7 @@
 slide_pickup_mujoco_env-v0:
   frame_skip: 5
   img_size: [256, 256]
-  goal: [0.6, 0.6, 0.5]
+  goal: [0.6, 0.6, 0.5] # x, y, z
   thresh: 0.1
   control_low: [-100.,-100.,-100.]
   control_high: [100.,100.,100.]
@@ -100,6 +100,7 @@ slide_pickup_obstacles_mujoco_env-v0:
       low: [-0.25, 0.45] # same as block_bottom
       high: [0.25, 0.75] # same as block_bottom
   block_obsA:
+    active: True
     mass: 0.5
     initial_pos: [-0.25, 0.6]
     size: [0.03, 0.03, 0.03]
@@ -107,10 +108,11 @@ slide_pickup_obstacles_mujoco_env-v0:
     friction: 0.2
     restitution: 0.0 # 0.99 bouncy
     state_ranges: # x, y
-      low: [-0.05, -0.18] # relative to block bottom
-      high: [0.05, -0.28] # relative to block bottom
+      low: [-0.05, -0.18] # relative to block bottom [-0.05, -0.18]
+      high: [0.05, -0.28] # relative to block bottom [0.05, -0.28]
     N_x: [50, 50]
   block_obsB:
+    active: True
     mass: 0.5
     initial_pos: [0.25, 0.6]
     size: [0.03, 0.03, 0.03]
