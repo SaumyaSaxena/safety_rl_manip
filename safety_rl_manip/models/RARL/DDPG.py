@@ -487,7 +487,7 @@ class DDPG(torch.nn.Module):
     def rollout_episodes(self, num_episodes):
         FP, FN, TP, TN, num_pred_success, num_gt_success = 0, 0, 0, 0, 0, 0
         avg_return, avg_ep_len = 0. , 0.
-        for i in range(num_episodes):
+        for i in trange(num_episodes, desc="Testing"):
             o, d, ep_ret, ep_len = self.test_env.reset(), False, 0, 0
 
             pred_v = self.ac_targ.q(
@@ -516,7 +516,7 @@ class DDPG(torch.nn.Module):
         false_neg_rate = FN/(FN+TP)
         avg_return = avg_return/num_episodes
         avg_ep_len = avg_ep_len/num_episodes
-
+        success_rate = num_gt_success/num_episodes
         info = {
             'Average_return': avg_return,
             'Average_episode_len': avg_ep_len,
@@ -529,6 +529,7 @@ class DDPG(torch.nn.Module):
             'TN': float(TN),
             'num_pred_success': float(num_pred_success),
             'num_gt_success': float(num_gt_success),
+            'success_rate': float(success_rate),
         }
         return info
 
@@ -612,12 +613,13 @@ class DDPG(torch.nn.Module):
                 print(f"Testing at epoch: {epoch}")
                 test_info = self.test_agent(epoch)
                 avg_test_return = test_info['Average_return']
+                success_rate = test_info['success_rate']
 
                 # Save model
                 if (epoch % self.model_save_freq == 0) or (epoch == self.epochs):
                     print(f"Saving model at epoch: {epoch}")
-                    save_file_name = os.path.join(self.modelFolder, f"step_{t}_test_return_{avg_test_return:.2f}.pth")
-                    status = self.topk_logger.push(save_file_name, avg_test_return)
+                    save_file_name = os.path.join(self.modelFolder, f"step_{t}_test_return_{avg_test_return:.2f}_succRate_{success_rate:.2f}.pth")
+                    status = self.topk_logger.push(save_file_name, success_rate)
                     if status:
                         torch.save(
                             obj={

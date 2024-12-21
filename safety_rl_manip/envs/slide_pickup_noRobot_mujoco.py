@@ -119,7 +119,6 @@ class SlidePickupMujocoEnv(gym.Env, EzPickle):
         world = MujocoWorldBase()
         mujoco_arena = MultiTaskNoWallsArena()
         world.merge(mujoco_arena)
-        self.indices_by_name = {}
 
         # Bottom block
         block_bottom = BoxObject(name='Block_bottom', size=self.env_cfg.block_bottom.size, rgba=self.env_cfg.block_bottom.rgba)

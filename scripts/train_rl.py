@@ -17,8 +17,8 @@ from safety_rl_manip.models.RARL.SAC import SAC
 logger = logging.getLogger(__name__)
 
 # @hydra.main(config_path='../cfg/', config_name='train_pickup_slide_mujoco_ddpg.yaml')
-# @hydra.main(config_path='../cfg/', config_name='train_pickup_slide_obstacles_mujoco_ddpg.yaml')
-@hydra.main(config_path='../cfg/', config_name='train_point_mass_2D_obstacles_switching.yaml')
+@hydra.main(config_path='../cfg/', config_name='train_pickup_slide_obstacles_mujoco_ddpg.yaml')
+# @hydra.main(config_path='../cfg/', config_name='train_point_mass_2D_obstacles_switching.yaml')
 # @hydra.main(config_path='../cfg/', config_name='train_point_mass_cont_ddpg.yaml')
 # @hydra.main(config_path='../cfg/', config_name='train_point_mass_cont_sac.yaml')
 def main(cfg):

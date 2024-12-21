@@ -1,0 +1,17 @@
+tag: ${now:%Y-%m-%d-%H-%M-%S}
+debug: True # TODO: always true since we are not using wandb during eval
+
+eval_cfg:
+  gpu: 0
+  seed: 30
+  wandb_load:
+    run_path1: iam-lab/safety_rl_manip/whlnqza6 # only obsA
+    file1: model/step_39999_test_return_7.63_succRate_1.00.pth
+    run_path2: iam-lab/safety_rl_manip/lzxquu0c # only obsB
+    file2: model/step_1039999_test_return_7.74.pth
+  eval_value_fn: True
+  eval_safe_rollouts: True
+  save_rollout_gifs: True
+  num_eval_episodes: 1000
+  num_rollout_gifs: 20
+  policy_type: 'agent1' # 'switching', 'agent1', 'agent2'

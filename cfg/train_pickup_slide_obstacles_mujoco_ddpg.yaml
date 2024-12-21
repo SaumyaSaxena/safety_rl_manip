@@ -5,7 +5,7 @@ tag: ${now:%Y-%m-%d-%H-%M-%S}
 run_name: "train_DDPG_pickup_slide_obstacles_mujoco_${train_cfg.mode}" 
 # variant: ${train_cfg.warmup_cfg.warmup_type}_UpdatePiType_${train_cfg.warmup_cfg.warmupQ_expert.update_pi_type}
 # variant: 'no_terminal_gammaSch150_lrSch'
-variant: 'no_sch_gamma'
+variant: 'onlyObsA_rejectionSample'
 
 hydra:
   run:
@@ -55,7 +55,7 @@ train_cfg:
   add_expert_to_buffer: False
   expert_data_loc: '/home/saumyas/Projects/safe_control/HJR_manip/outputs/DoubleIntegrator/goto_goal_datasets/data_DoubleIntegrator_goto_goal_N_620.pkl'
   expert_data_frac: 0.75
-  mode: 'lagrange' # RA, lagrange
+  mode: 'RA' # RA, lagrange
   seed: ${seed}
   steps_per_epoch: 4000
   epochs: 400

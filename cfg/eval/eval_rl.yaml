@@ -5,9 +5,9 @@ eval_cfg:
   gpu: 0
   seed: 30
   wandb_load:
-    run_path: iam-lab/safety_rl_manip/p7q0l7z3
-    file: model/step_95999_test_return_-467.63.pth
+    run_path: iam-lab/safety_rl_manip/whlnqza6
+    file: model/step_39999_test_return_7.63_succRate_1.00.pth
   eval_value_fn: True
   eval_safe_rollouts: True
-  save_rollout_gifs: False
-  num_eval_episodes: 100
+  save_rollout_gifs: True
+  num_eval_episodes: 1000

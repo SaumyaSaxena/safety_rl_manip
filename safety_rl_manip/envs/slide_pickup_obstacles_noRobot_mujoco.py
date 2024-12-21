@@ -54,8 +54,6 @@ class SlidePickupObstaclesMujocoEnv(gym.Env, EzPickle):
         self._setup_procedural_env()
         self.renderer = mujoco.Renderer(self.model, self.env_cfg.img_size[0], self.env_cfg.img_size[1])
         
-        # Visualization Parameters
-        self.visual_initial_states = self.sample_initial_state(self.env_cfg.get('num_eval_trajs', 20)) # samples n_all
 
         # Will visualize the value function in x-y only for initial positions of bottom block
         self.N_x = self.env_cfg.block_bottom.N_x
@@ -66,6 +64,9 @@ class SlidePickupObstaclesMujocoEnv(gym.Env, EzPickle):
         self.safety_set_top_low = self.grid_x[...,6:9] - self.env_cfg.block_top.safety_set.low
         self.safety_set_top_high = self.grid_x[...,6:9] + self.env_cfg.block_top.safety_set.high
         self.obstacle_T = self.safety_margin(self.grid_x)
+
+        # Visualization Parameters
+        self.visual_initial_states = self.sample_initial_state(self.env_cfg.get('num_eval_trajs', 20)) # samples n_all
 
     def create_env_grid(self):
         # TODO(saumya): Add variable obstacles here
@@ -111,7 +112,6 @@ class SlidePickupObstaclesMujocoEnv(gym.Env, EzPickle):
         self.grid_x_flat = torch.from_numpy(self.grid_x.reshape(-1, self.grid_x.shape[-1])).float().to(self.device)
 
     def get_obs_ranges_from_block_states(self, xy_samples):
-
         obsA_state_range_low = np.maximum(
             xy_samples + np.array(self.env_cfg.block_obsA.state_ranges.low), 
             self.env_bound_low[:2]+np.array(self.env_cfg.block_obsA.size)[:2])
@@ -132,7 +132,6 @@ class SlidePickupObstaclesMujocoEnv(gym.Env, EzPickle):
         world = MujocoWorldBase()
         mujoco_arena = MultiTaskNoWallsArena()
         world.merge(mujoco_arena)
-        self.indices_by_name = {}
 
         # Bottom block
         block_bottom = BoxObject(name='Block_bottom', size=self.env_cfg.block_bottom.size, rgba=self.env_cfg.block_bottom.rgba)
@@ -177,35 +176,53 @@ class SlidePickupObstaclesMujocoEnv(gym.Env, EzPickle):
 
     def sample_initial_state(self, N):
         # sample N initial states
-        states = np.zeros((N, self.n_all))
-
-        xy_sample_blocks = np.random.uniform(
-            low=self.env_cfg.block_bottom.state_ranges.low, 
-            high=self.env_cfg.block_bottom.state_ranges.high,
-            size=(N,len(self.env_cfg.block_bottom.state_ranges.low)))
         
-        states[:, 0:2] = xy_sample_blocks
-        states[:, 6:8] = xy_sample_blocks
-        states[:,2] = self.block_bottom_z
-        states[:,8] = self.block_top_z
+        samples = np.empty((0, self.n_all))
+        while(len(samples)<N):
+            states = np.zeros((N, self.n_all))
+            xy_sample_blocks = np.random.uniform(
+                low=self.env_cfg.block_bottom.state_ranges.low, 
+                high=self.env_cfg.block_bottom.state_ranges.high,
+                size=(N,len(self.env_cfg.block_bottom.state_ranges.low)))
+            
+            states[:, 0:2] = xy_sample_blocks
+            states[:, 6:8] = xy_sample_blocks
+            states[:,2] = self.block_bottom_z
+            states[:,8] = self.block_top_z
 
-        obsA_state_range_low, obsA_state_range_high, obsB_state_range_low, obsB_state_range_high = self.get_obs_ranges_from_block_states(xy_sample_blocks)
-
-        xy_sample_obsA = np.random.uniform(
-            low=obsA_state_range_low, 
-            high=obsA_state_range_high)
+            obsA_state_range_low, obsA_state_range_high, obsB_state_range_low, obsB_state_range_high = self.get_obs_ranges_from_block_states(xy_sample_blocks)
         
-        xy_sample_obsB = np.random.uniform(
-            low=obsB_state_range_low, 
-            high=obsB_state_range_high)
-
-        states[:, 12:14] = xy_sample_obsA
-        states[:, 18:20] = xy_sample_obsB
-        states[:,14] = self.block_obsA_z
-        states[:,20] = self.block_obsB_z
-
+            xy_sample_obsA = np.random.uniform(
+                    low=obsA_state_range_low, 
+                    high=obsA_state_range_high)
+                
+            xy_sample_obsB = np.random.uniform(
+                low=obsB_state_range_low, 
+                high=obsB_state_range_high)
+            
+            if self.block_obsA_active and self.block_obsB_active:
+                states[:, 12:14] = xy_sample_obsA
+                states[:, 18:20] = xy_sample_obsB
+                states[:,14] = self.block_obsA_z
+                states[:,20] = self.block_obsB_z
+            elif self.block_obsA_active:
+                states[:, 12:14] = xy_sample_obsA
+                states[:,14] = self.block_obsA_z
+            elif self.block_obsB_active:
+                states[:, 12:14] = xy_sample_obsB
+                states[:,14] = self.block_obsB_z
+            else:
+                raise NotImplementedError("Atleast one of the obstacles should be active!")
+            self.safety_set_top_low = states[:,6:9] + self.env_cfg.block_top.safety_set.low
+            self.safety_set_top_high = states[:,6:9] + self.env_cfg.block_top.safety_set.high
+            self.target_set_low = states[:,:3] + self.env_cfg.block_bottom.target_set.low
+            self.target_set_high = states[:,:3] + self.env_cfg.block_bottom.target_set.high
+            fail, gx = self.check_failure(states)
+            success, lx = self.check_success(states)
+            done = self.get_done(states, success, fail)
+            samples =  np.concatenate([samples, states[np.logical_not(done)]], axis=0)
         #TODO: do this for variable number of obstacles
-        return states
+        return samples[:N]
     
     def reset(self, start=None):
         # start: shape(self.n)
@@ -227,7 +244,7 @@ class SlidePickupObstaclesMujocoEnv(gym.Env, EzPickle):
         elif self.block_obsA_active:
             self.data.qpos[14:17] = sample_state[12:15] # obsA
         elif self.block_obsB_active:
-            self.data.qpos[14:17] = sample_state[18:21] # obsB
+            self.data.qpos[14:17] = sample_state[12:15] # obsB
         else:
             raise NotImplementedError("Atleast one of the obstacles should be active!")
 
@@ -372,16 +389,16 @@ class SlidePickupObstaclesMujocoEnv(gym.Env, EzPickle):
         upper_boundary = np.max(top_block_pos - self.safety_set_top_high, axis=-1)
         top_block_bounds = np.maximum(lower_boundary, upper_boundary)
 
-        # collision_dist = np.linalg.norm(self.env_cfg.block_bottom.size[:2]) + np.linalg.norm(self.env_cfg.block_obsA.size[:2])
-        # obstacle = (self.env_cfg.thresh + collision_dist) - np.linalg.norm(s[...,:3]-s[...,12:15])
+        collision_dist = np.linalg.norm(self.env_cfg.block_bottom.size[:2]) + np.linalg.norm(self.env_cfg.block_obsA.size[:2])
+        obstacle = (self.env_cfg.thresh + collision_dist) - np.linalg.norm(s[...,:3]-s[...,12:15])
 
-        obstacle_high = s[...,12:15] + self.env_cfg.block_bottom.size + self.env_cfg.block_obsA.size
-        obstacle_low = s[...,12:15] - self.env_cfg.block_bottom.size - self.env_cfg.block_obsA.size
-        obstacle = signed_dist_fn_rectangle(
-            s[...,:3], 
-            obstacle_low, 
-            obstacle_high,
-            obstacle=True)
+        # obstacle_high = s[...,12:15] + self.env_cfg.block_bottom.size + self.env_cfg.block_obsA.size
+        # obstacle_low = s[...,12:15] - self.env_cfg.block_bottom.size - self.env_cfg.block_obsA.size
+        # obstacle = signed_dist_fn_rectangle(
+        #     s[...,:3], 
+        #     obstacle_low, 
+        #     obstacle_high,
+        #     obstacle=True)
         
         gx = self.scaling_safety * np.maximum(top_block_bounds, obstacle)
 
