@@ -1,4 +1,4 @@
-name: drabe
+name: drabe_mj
 channels:
   - pytorch
   - conda-forge
@@ -153,4 +153,4 @@ dependencies:
       - wandb==0.17.3
       - wcwidth==0.2.13
       - zipp==3.15.0
-prefix: /home/saumyas/anaconda3/envs/drabe
+prefix: /home/saumyas/anaconda3/envs/drabe_mj

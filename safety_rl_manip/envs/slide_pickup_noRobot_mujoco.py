@@ -138,8 +138,8 @@ class SlidePickupMujocoEnv(gym.Env, EzPickle):
 
         # TODO(saumya): Add distractors
 
-        world.root.find('compiler').set('inertiagrouprange', '0 5')
-        world.root.find('compiler').set('inertiafromgeom', 'auto')
+        # world.root.find('compiler').set('inertiagrouprange', '0 5')
+        # world.root.find('compiler').set('inertiafromgeom', 'auto')
         self.model = world.get_model(mode="mujoco")
         self.data = mujoco.MjData(self.model)
 

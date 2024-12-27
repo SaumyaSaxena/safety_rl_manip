@@ -86,3 +86,4 @@ def check_contact(env, geoms_1, geoms_2=None):
         if (c1_in_g1 and c2_in_g2) or (c1_in_g2 and c2_in_g1):
             return True
     return False
+

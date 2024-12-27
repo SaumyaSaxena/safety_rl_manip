@@ -28,9 +28,9 @@ def encode_image(image_path):
 
 class TabletopObjects(str, Enum):
     soft_toy = "soft_toy"
-    brown_box = "brown_box"
-    white_box = "white_box"
-    wine_glass = "wine_glass"
+    purple_box = "purple_box"
+    yellow_box = "yellow_box"
+    glass_kettle = "glass_kettle"
 
 
 def create_planner_response():
@@ -40,8 +40,8 @@ def create_planner_response():
         object1: TabletopObjects
         explanation_obj2: str
         object2: TabletopObjects
-        # explanation_obj3: str
-        # object3: TabletopObjects
+        explanation_obj3: str
+        object3: TabletopObjects
 
     class PlannerResponse(BaseModel):
         relevant_objects: RelevantObjects
@@ -64,9 +64,9 @@ class SafePlanner:
         In order to do that, the two criteria you consider are 'task success' and 'safety'.
         Under the 'task success' criteria you figure out which objects need to be manipulated or interacted with to accomplish the task.
         Under the 'safety' criteria you consider the objects that you need to move carefully around to prevent damage, spillage, collision, or other safety critical criteria.
-        You are allowed to select two distinct objects that are relevant for the task and also provide explanation for why you are choosing these objects,
+        You are allowed to select three distinct objects that are relevant for the task and also provide explanation for why you are choosing these objects,
         specifically mention if a selected object is 'task critical' or 'safety critical' or both.
-        Also, provide a brief description of the image, paying attention to the features in the image that are task relevant and safety critical.
+        Also, provide a brief description of the sequence of images, paying attention to the features in the images that are task relevant and safety critical.
         The image contains a set of sequential timeshots taken in the scene, which depict the motion of objects in the recent past.
         """
         return prompt
@@ -77,7 +77,7 @@ class SafePlanner:
         #     Pick up the brown coffee mug and place it next to the white notepad on the right. Be careful, the brown coffee mug is full of hot coffee.
         # """
         prompt = """
-            Slide the brown box from under the white box and move towards the edge of the table where some other object is placed.
+            Slide the purple box from under the yellow box and move towards the edge of the table where some other object is placed.
         """
         return prompt
     
@@ -155,12 +155,13 @@ def append_and_save_png(img_path, png_files):
         text_color = (255, 255, 255)  # White color (R, G, B)
         # Add the text to the image
         draw.text(position, text, fill=text_color, font=ImageFont.load_default())
+        # draw.text(position, text, fill=text_color, font=ImageFont.truetype("arial.ttf", 40))
 
         combined_image.paste(img, (x_offset, 0))
         x_offset += img.width
 
     # Save the combined image
-    combined_image.save(img_path+"full_traj.png", "PNG")
+    combined_image.save(img_path+"full_traj_franka_teapot_teddy.png", "PNG")
 
 import cv2
 def mov_to_pngs(mov_path):
@@ -204,15 +205,17 @@ if __name__ == "__main__":
     planner = SafePlanner()
 
     # img_path = '/home/saumyas/Projects/safe_control/safety_rl_manip/outputs/gpt_safety/imgs_coffee/move_over_laptop/'
-    img_path = '/home/saumyas/Projects/safe_control/safety_rl_manip/outputs/gpt_safety/slide_pickup/slide_pick_obs/'
+    img_path = '/home/saumyas/Projects/safe_control/safety_rl_manip/outputs/media/slide_pickup_clutter/'
     # save_png_from_heic(img_path)
     # png_files = ["img_low_res_1.png", "img_low_res_0.png", "img_low_res_3.png", "img_low_res_2.png"]
     # png_files = ["img_low_res_2.png", "img_low_res_1.png", "img_low_res_0.png"]
     # png_files = ["frame_0290.png", "frame_0305.png", "frame_0310.png", "frame_0325.png"]
     # png_files = ["frame_0700.png", "frame_0705.png", "frame_0710.png", "frame_0720.png"]
-    # append_and_save_png(img_path, png_files)
-    
-    png_files = [f for f in os.listdir(img_path) if (f.lower().endswith(".png") and 'full_traj_teddy' in f.lower())]
+    png_files = ["rgb_slide_pickup_clutter_t_152_0_front.png", "rgb_slide_pickup_clutter_t_164_0_front.png", "rgb_slide_pickup_clutter_t_180_0_front.png", "rgb_slide_pickup_clutter_t_190_0_front.png"]
+    append_and_save_png(img_path, png_files)
+    import ipdb; ipdb.set_trace()
+
+    png_files = [f for f in os.listdir(img_path) if (f.lower().endswith(".png") and 'full_traj_franka_teapot_teddy' in f.lower())]
     for img in png_files:
         gpt_output = planner.get_gpt_output(img_path+img)
         print(gpt_output.parsed)

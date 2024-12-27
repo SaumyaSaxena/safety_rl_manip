@@ -9,23 +9,23 @@ import matplotlib.pyplot as plt
 from robosuite.models import MujocoWorldBase
 from robosuite.models.arenas import MultiTaskNoWallsArena
 import mujoco
+from mujoco import viewer
 
 from robosuite.models.objects.primitive.box import BoxObject
 from robosuite.models.objects.utils import get_obj_from_name
 
-from safety_rl_manip.envs.utils import create_grid, get_contacts, check_contact
+from safety_rl_manip.envs.utils import create_grid
 from scipy.spatial.transform import Rotation
 import torch
 import wandb
 from robosuite.utils.placement_samplers import UniformRandomSampler, SequentialCompositeSampler
 from robosuite.models.robots import Panda
 from robosuite.models.grippers import gripper_factory
-from robosuite.utils.mjcf_utils import recolor_collision_geoms
+from robosuite.utils.mjcf_utils import recolor_collision_geoms, new_site, string_to_array
 from robosuite.utils.binding_utils import MjSim
 import robosuite.utils.sim_utils as SU
 
 from safety_rl_manip.envs.utils import create_grid, signed_dist_fn_rectangle
-
 
 
 class SlidePickupClutterMujocoEnv(gym.Env, EzPickle):
@@ -68,7 +68,12 @@ class SlidePickupClutterMujocoEnv(gym.Env, EzPickle):
         self.scaling_target = self.env_cfg.scaling_target
         self.scaling_safety = self.env_cfg.scaling_safety
         self._setup_procedural_env()
+
+        self.model.vis.global_.offheight = self.env_cfg.img_size[0]
+        self.model.vis.global_.offwidth = self.env_cfg.img_size[1]
+
         self.renderer = mujoco.Renderer(self.model, height=self.env_cfg.img_size[0], width=self.env_cfg.img_size[1])
+        
         self.initialize_procedural_sampler()
         self.reset_mocap_welds()
 
@@ -128,6 +133,7 @@ class SlidePickupClutterMujocoEnv(gym.Env, EzPickle):
     @property
     def top_block_pos(self):
         body_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_BODY, f'{self.env_cfg.block_top.block_name}_main')
+        # self.data.subtree_com[body_id]
         return self.data.xpos[body_id]
 
     @property
@@ -225,7 +231,7 @@ class SlidePickupClutterMujocoEnv(gym.Env, EzPickle):
         recolor_collision_geoms(root=self.mujoco_robot.worldbody, rgba=[0, 0, 0., 0.])
         world.merge(self.mujoco_robot)
 
-        self.all_mujoco_objects = []
+        self.all_mujoco_objects = {}
         # Bottom block
         if 'block' in self.env_cfg.block_bottom.block_name:
             block_bottom = BoxObject(name='block_bottom', size=self.env_cfg.block_bottom.size, rgba=self.env_cfg.block_bottom.rgba)
@@ -236,8 +242,23 @@ class SlidePickupClutterMujocoEnv(gym.Env, EzPickle):
         block_bottom_body.set('pos', f'{self.env_cfg.block_bottom.initial_pos[0]} {self.env_cfg.block_bottom.initial_pos[1]} {self.block_bottom_z}')
         world.worldbody.append(block_bottom_body)
         world.merge_assets(block_bottom)
-        self.all_mujoco_objects.append(block_bottom)
+        self.all_mujoco_objects['block_bottom'] = block_bottom
+        hor_site = block_bottom.worldbody.find(f"./body/site[@name='{self.env_cfg.block_bottom.block_name}_horizontal_radius_site']")
+        self.bottom_hor_rad = string_to_array(hor_site.get("pos"))
 
+        rot_z = Rotation.from_euler('z', -90, degrees=True)  # 90 degrees about Z-axis
+        rot_x = Rotation.from_euler('x', -90, degrees=True)  # 90 degrees about X-axis
+        relquat = (rot_x*rot_z).as_quat(scalar_first=True)
+        
+        suction_site = new_site(
+            name=f"suction_site", 
+            pos=(-self.bottom_hor_rad[0]+0.01, -self.block_bottom_z, 0), 
+            quat=relquat,
+            size=(0.01, 0.01, 0.01), 
+            rgba=(1, 0, 0, 1)
+        )
+        block_bottom_body.append(suction_site)
+        
         # Top block
         if 'block' in self.env_cfg.block_top.block_name:
             block_top = BoxObject(name='block_top', size=self.env_cfg.block_top.size, rgba=self.env_cfg.block_top.rgba)
@@ -248,7 +269,7 @@ class SlidePickupClutterMujocoEnv(gym.Env, EzPickle):
         block_top_body.set('pos', f'{self.env_cfg.block_top.initial_pos[0]} {self.env_cfg.block_top.initial_pos[1]} {self.block_top_z}')
         world.worldbody.append(block_top_body)
         world.merge_assets(block_top)
-        self.all_mujoco_objects.append(block_top)
+        self.all_mujoco_objects['block_top'] = block_top
 
         self.object_z = []
         for obj_name, obj_pos in zip(self.env_cfg.objects.names, self.env_cfg.objects.initial_poses):
@@ -258,11 +279,11 @@ class SlidePickupClutterMujocoEnv(gym.Env, EzPickle):
             obj_body.set('pos', f'{obj_pos[0]} {obj_pos[1]} {-obj.bottom_offset[2]}')
             world.worldbody.append(obj_body)
             world.merge_assets(obj)
-            self.all_mujoco_objects.append(obj)
+            self.all_mujoco_objects[obj_name] = obj
         self.object_z = np.array(self.object_z)
 
-        world.root.find('compiler').set('inertiagrouprange', '0 5')
-        world.root.find('compiler').set('inertiafromgeom', 'auto')
+        # world.root.find('compiler').set('inertiagrouprange', '0 5')
+        # world.root.find('compiler').set('inertiafromgeom', 'auto')
         self.model = world.get_model(mode="mujoco")
         self.data = mujoco.MjData(self.model)
 
@@ -337,7 +358,7 @@ class SlidePickupClutterMujocoEnv(gym.Env, EzPickle):
         for i in range(self.N_objs):
             self.composite_sampler.append_sampler(object_samplers[2+i])
 
-        for obj_name, mj_obj in zip(self.all_object_names, self.all_mujoco_objects):
+        for obj_name, mj_obj in self.all_mujoco_objects.items():
             self.composite_sampler.add_objects_to_sampler(sampler_name=f"{obj_name}_sampler", mujoco_objects=mj_obj)
 
     def sample_initial_state(self, N):
@@ -349,7 +370,7 @@ class SlidePickupClutterMujocoEnv(gym.Env, EzPickle):
                 states[:, i*6:i*6+3] = np.array(sample[obj_name][0])
         else:
             states[:, 0:2] = self.env_cfg.block_bottom.initial_pos
-            states[:, 6:8] = self.env_cfg.block_bottom.initial_pos
+            states[:, 6:8] = self.env_cfg.block_top.initial_pos
             states[:,2] = self.block_bottom_z
             states[:,8] = self.block_top_z
             for i in range(self.N_objs):
@@ -364,7 +385,8 @@ class SlidePickupClutterMujocoEnv(gym.Env, EzPickle):
         self.data.qpos[self.gripper_qpos_index] = np.array(self.env_cfg.init_fingers_qpos) # gripper fingers
 
         neq = self.model.eq_data.shape[0]
-        self.model.eq_active[neq-1] = 0
+        self.model.eq_active0[neq-1] = 0
+        self.data.eq_active[neq-1] = 0
         self.suction_gripper_active = False
         
         for _ in range(steps):
@@ -435,6 +457,7 @@ class SlidePickupClutterMujocoEnv(gym.Env, EzPickle):
         self.target_set_low = curr_state[6:9] + self.env_cfg.block_bottom.target_set.low
         self.target_set_high = curr_state[6:9] + self.env_cfg.block_bottom.target_set.high
 
+
         return curr_state
 
     def get_cost(self, l_x, g_x, success, fail):
@@ -469,15 +492,17 @@ class SlidePickupClutterMujocoEnv(gym.Env, EzPickle):
         Returns:
             bool: True if the agent is not in the environment.
         """
-        #TODO(saumya): extend to distractor objects
+        # EE within table
         outsideLeft_ee = np.any((state[...,0:3] <= self.env_bound_low), axis=-1)
         outsideRight_ee = np.any((state[...,0:3] >= self.env_bound_high), axis=-1)
         outside_ee = np.logical_or(outsideLeft_ee, outsideRight_ee)
 
+        # Bottom bottom within table
         outsideLeft_bottom = np.any((state[...,6:9] <= self.env_bound_low), axis=-1)
         outsideRight_bottom = np.any((state[...,6:9] >= self.env_bound_high), axis=-1)
         outside_bottom = np.logical_or(outsideLeft_bottom, outsideRight_bottom)
 
+        # Bottom top within table
         outsideLeft_top = np.any((state[...,12:15] <= self.env_bound_low), axis=-1)
         outsideRight_top = np.any((state[...,12:15] >= self.env_bound_high), axis=-1)
         outside_top = np.logical_or(outsideLeft_top, outsideRight_top)
@@ -529,49 +554,72 @@ class SlidePickupClutterMujocoEnv(gym.Env, EzPickle):
             body_state = np.append(self.data.xpos[body_id], self.data.qvel[self.robot_dof+i*6: self.robot_dof+i*6+3])
             xt = np.append(xt, body_state)
         return xt
+    
+    def check_contact_slide(self):
+        for contact in self.data.contact[: self.data.ncon]:
+            # check contact geom in geoms; add to contact set if match is found
+            # g1, g2 = self.model.geom_id2name(contact.geom1), self.model.geom_id2name(contact.geom2)
+
+            g1 = mujoco.mj_id2name(self.model, mujoco.mjtObj.mjOBJ_GEOM, contact.geom1)
+            g2 = mujoco.mj_id2name(self.model, mujoco.mjtObj.mjOBJ_GEOM, contact.geom2)
+
+            if (g1 in self.gripper.contact_geoms) and (self.env_cfg.block_bottom.block_name in g2):
+                return True
+
+            if (g2 in self.gripper.contact_geoms) and (self.env_cfg.block_bottom.block_name in g1):
+                return True
+            
+        return False
+
 
     def check_suction_grasp(self):
         grasp_object_idx = 0
-        if check_contact(self, geoms_1=self.gripper.contact_geoms, geoms_2=self.all_mujoco_objects[grasp_object_idx].contact_geoms) and not self.suction_gripper_active:
-
-            body1_name = "gripper0_eef"
-            body2_name = f"{self.all_object_names[grasp_object_idx]}_main"
-
-            body1_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_BODY, body1_name)
-            body2_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_BODY, body2_name)
-
-            relpos = self.bottom_block_pos - self.ee_pos
-            # relpos = self.ee_pos - self.bottom_block_pos
-            relpos2 = relpos.copy()
-            relpos2[0] = relpos[1]
-            relpos2[1] = -relpos[0]
-
-            # Compute the relative orientation
-            quat_body1 = self.data.xquat[body1_id]
-            quat_body2 = self.data.xquat[body2_id]
-
-            neg_quat_body2 = np.zeros(4)
-            mujoco.mju_negQuat(neg_quat_body2, quat_body2)
-            relquat = np.zeros(4)
-            relquat = np.array(self.env_cfg.mocap_quat)
-            # relquat = np.array([1,0,0,0])
-            relquat = Rotation.from_euler('z', 90, degrees=True).as_quat()
-            # mujoco.mju_mulQuat(relquat, quat_body1, neg_quat_body2)
-            # import ipdb; ipdb.set_trace()
-
-            # Update the weld constraint
-            neq = self.model.eq_data.shape[0]
-            self.model.eq_data[neq-1, :3] = relpos
-            # self.model.eq_data[neq-1, 7:10] = self.ee_pos - self.bottom_block_pos
+        if self.check_contact_slide() and not self.suction_gripper_active:
+            
+            # body1_name = "gripper0_eef"
+            # body2_name = f"{self.all_object_names[grasp_object_idx]}_main"
+            # body1_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_BODY, body1_name)
+            # body2_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_BODY, body2_name)
+            # relpos = self.bottom_block_pos - self.ee_pos
+            # # Compute the relative orientation
+            # quat_body1 = self.data.xquat[body1_id]
+            # quat_body2 = self.data.xquat[body2_id]
+            # neg_quat_body1 = np.zeros(4)
+            # mujoco.mju_negQuat(neg_quat_body1, quat_body1)
+            # relquat = np.zeros(4)
+            # mujoco.mju_mulQuat(relquat, quat_body2, neg_quat_body1)
+            # rot_z = Rotation.from_euler('y', 90, degrees=True)  # 90 degrees about Z-axis
+            # rot_x = Rotation.from_euler('y', 0, degrees=True)  # 90 degrees about X-axis
+            # relquat = (rot_x*rot_z).as_quat(scalar_first=True)
+            # neq = self.model.eq_data.shape[0]
+            # self.model.eq_data[neq-1, :3] = relpos
+            # # self.model.eq_data[neq-1, 7:10] = self.ee_pos - self.bottom_block_pos
             # self.model.eq_data[neq-1, 3:3+4] = relquat
+            # self.model.eq_type[neq-1] = 1  # 1 corresponds to a 'weld' constraint
+            # self.model.eq_obj1id[neq-1] = body1_id
+            # self.model.eq_obj2id[neq-1] = body2_id
+            # self.model.eq_active0[neq-1] = 1
+            # self.data.eq_active[neq-1] = 1
+            # self.model.eq_objtype[neq-1] = 1 # body
+            # self.suction_gripper_active = True
 
+            print([mujoco.mj_id2name(self.model, mujoco.mjtObj.mjOBJ_SITE, i) for i in range(self.model.nsite)])
+
+            site1_name = "gripper0_grip_site"
+            site2_name = "suction_site"
+            site1_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_SITE, site1_name)
+            site2_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_SITE, site2_name)
+            neq = self.model.eq_data.shape[0]
             self.model.eq_type[neq-1] = 1  # 1 corresponds to a 'weld' constraint
-            self.model.eq_obj1id[neq-1] = body1_id
-            self.model.eq_obj2id[neq-1] = body2_id
-            self.model.eq_active[neq-1] = 1
+            self.model.eq_obj1id[neq-1] = site1_id
+            self.model.eq_obj2id[neq-1] = site2_id
+            self.model.eq_active0[neq-1] = 1
+            self.data.eq_active[neq-1] = 1
+            self.model.eq_objtype[neq-1] = 6 # site
             self.suction_gripper_active = True
 
             self.sim.forward()
+            # viewer.launch(self.model, self.data)
 
     # == Dynamics ==
     def step(self, action):
@@ -599,24 +647,20 @@ class SlidePickupClutterMujocoEnv(gym.Env, EzPickle):
         pass
     
     def get_suction_target(self):
-        # target_pos = (self.bottom_block_pos + self.top_block_pos)/2
-        # target_pos[0] -= (self.env_cfg.block_bottom.size[0]+self.env_cfg.block_top.size[0])/2.0
-        # target_pos[2] = self.bottom_block_pos[2]
 
         # target_pos = self.bottom_block_pos.copy()
-        # target_pos[0] = target_pos[0] - np.sqrt(2)*self.all_mujoco_objects[0].horizontal_radius + 0.01
+        # target_pos[0] = target_pos[0] - self.bottom_hor_rad[0] + 0.03
 
-        target_pos = self.top_block_pos.copy()
-        # target_pos[0] = target_pos[0] - self.env_cfg.block_top.size[0] + 0.01
-
+        target_pos = self._get_site_pos('suction_site')
+                
         return target_pos
 
     def get_action(self):
         action = np.zeros(4)
         action[3] = 1.0
         if self.suction_gripper_active:
-            # action[0] = -0.1
-            action[0] = 0
+            action[:3] = [-0.2, 0, 0.1]
+            # action[0] = 0
             print("suction active")
         else:
             target_pos = self.get_suction_target()
@@ -624,7 +668,29 @@ class SlidePickupClutterMujocoEnv(gym.Env, EzPickle):
 
             site_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_SITE, 'placeSiteB')
             self.model.site_pos[site_id] = target_pos
+            # viewer.launch(self.model, self.data)
+
         return action
+
+    def collision_distance(self, obj1_name, obj1_state, obj2_name, obj2_state):
+        # g(x)>0 is obstacle
+        hor_site = self.all_mujoco_objects[obj1_name].worldbody.find(f"./body/site[@name='{obj1_name}_horizontal_radius_site']")
+        obj1_hor_rad = string_to_array(hor_site.get("pos"))
+
+        hor_site = self.all_mujoco_objects[obj2_name].worldbody.find(f"./body/site[@name='{obj2_name}_horizontal_radius_site']")
+        obj2_hor_rad = string_to_array(hor_site.get("pos"))
+
+        obstacle_high = obj1_state[...,:3] + obj1_hor_rad + obj2_hor_rad
+        obstacle_low = obj1_state[...,:3] - obj1_hor_rad - obj2_hor_rad
+        obstacle = signed_dist_fn_rectangle(
+            obj2_state[...,:3], 
+            obstacle_low, 
+            obstacle_high,
+            obstacle=True)
+
+        # collision_dist = self.all_mujoco_objects[0].horizontal_radius + self.all_mujoco_objects[2+i].horizontal_radius
+        # obstacle = (self.env_cfg.thresh + collision_dist) - np.linalg.norm(s[...,6:9]-s[...,18+i*6:18+i*6+3])
+        return obstacle
 
     def safety_margin(self, s, safety_set_top_low=None, safety_set_top_high=None):
         # Input:s top block position, shape (batch, 3)
@@ -641,22 +707,19 @@ class SlidePickupClutterMujocoEnv(gym.Env, EzPickle):
         upper_boundary = np.max(top_block_pos - safety_set_top_high, axis=-1)
         gx = np.maximum(lower_boundary, upper_boundary) # top block safety
 
-        # gripper should not hit top block
-        obstacle_high = s[...,12:15] + self.env_cfg.block_top.size
-        obstacle_low = s[...,12:15] - self.env_cfg.block_top.size
-        obstacle = signed_dist_fn_rectangle(
-            s[...,:3], 
-            obstacle_low, 
-            obstacle_high,
-            obstacle=True)
-        gx = np.maximum(gx, obstacle)
+        # # gripper should not hit top block
+        # obstacle_high = s[...,12:15] + self.env_cfg.block_top.size
+        # obstacle_low = s[...,12:15] - self.env_cfg.block_top.size
+        # obstacle = signed_dist_fn_rectangle(
+        #     s[...,:3], 
+        #     obstacle_low, 
+        #     obstacle_high,
+        #     obstacle=True)
+        # gx = np.maximum(gx, obstacle)
 
-        # obstacle avoidance between bottom block and distractors self.N_objs
-        for i in range(self.N_objs):
-            if i==0:
-                continue
-            collision_dist = self.all_mujoco_objects[0].horizontal_radius + self.all_mujoco_objects[2+i].horizontal_radius
-            obstacle = (self.env_cfg.thresh + collision_dist) - np.linalg.norm(s[...,6:9]-s[...,18+i*6:18+i*6+3])
+        # obstacle avoidance between bottom block and distractors
+        for i, obj_name in enumerate(self.env_cfg.objects.names):
+            obstacle = self.collision_distance('block_bottom', s[...,6:9], obj_name, s[...,18+i*6:18+i*6+3])
             gx = np.maximum(gx, obstacle)
         
         gx = self.scaling_safety * gx
@@ -897,7 +960,7 @@ if __name__ == "__main__":
     env = gym.make(env_name, device=0, cfg=env_cfg[env_name])
 
     save_gif = True
-    num_episodes = 10
+    num_episodes = 1
     max_ep_len = 200
     down_action = np.array([0.0,0,-0.3,0])
     up_action = np.array([0.3,0,0.3,0])
@@ -944,7 +1007,7 @@ if __name__ == "__main__":
 
             env.renderer.update_scene(env.data, camera=env.front_cam_name)
             img = env.renderer.render()
-            # Image.fromarray(img).save(out_folder + f"rgb_slide_pickup_clutter_t_{ep_len}_{i}_front.png")
+            Image.fromarray(img).save(out_folder + f"rgb_slide_pickup_clutter_t_{ep_len}_{i}_front.png")
             imgs.append(img)
 
             env.renderer.update_scene(env.data, camera=env.side_cam_name) 
@@ -956,4 +1019,4 @@ if __name__ == "__main__":
         print(f'ep_len: {ep_len}')
         if save_gif:
             filename = out_folder + f'test_slide_pickup_clutter_box_{i}.gif'
-            imageio.mimsave(filename, imgs[::4], duration=500)
+            imageio.mimsave(filename, imgs[::4], duration=100)
