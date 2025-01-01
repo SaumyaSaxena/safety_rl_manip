@@ -25,8 +25,7 @@ from robosuite.utils.mjcf_utils import recolor_collision_geoms, new_site, string
 from robosuite.utils.binding_utils import MjSim
 import robosuite.utils.sim_utils as SU
 
-from safety_rl_manip.envs.utils import create_grid, signed_dist_fn_rectangle
-
+from safety_rl_manip.envs.utils import create_grid, signed_dist_fn_rectangle_obstacle, signed_dist_fn_rectangle
 
 class SlidePickupClutterMujocoEnv(gym.Env, EzPickle):
     def __init__(self, device, cfg):
@@ -37,12 +36,15 @@ class SlidePickupClutterMujocoEnv(gym.Env, EzPickle):
         self._did_see_sim_exception = False
         self.goal = np.array(self.env_cfg.goal)
 
-        self.all_object_names = [self.env_cfg.block_bottom.block_name, self.env_cfg.block_top.block_name] + self.env_cfg.objects.names
+        self.all_blocks_object_names = [self.env_cfg.block_bottom.block_name, self.env_cfg.block_top.block_name] + self.env_cfg.objects.names
 
-        self.N_O = len(self.all_object_names)
+        self.rel_obj_names = [self.env_cfg.objects.names[0]] # updated by vlm planner
+
+        self.N_O = len(self.all_blocks_object_names)
         self.N_objs = len(self.env_cfg.objects.names)
 
-        self.n = self.env_cfg.n_rel_objs*6 # max number of total objects is 3
+        self.n = (3+self.env_cfg.n_rel_objs)*6 # gripper+block_bottom+block_top+objects
+
         self.n_all = self.N_O*6
         self.m = 3
 
@@ -110,7 +112,7 @@ class SlidePickupClutterMujocoEnv(gym.Env, EzPickle):
 
         # Visualization Parameters
         # self.visual_initial_states = self.sample_initial_state(self.env_cfg.get('num_eval_trajs', 20)) # samples n_all
-
+        self.visual_initial_states = None
     
     @property
     def tcp_center(self):
@@ -140,6 +142,10 @@ class SlidePickupClutterMujocoEnv(gym.Env, EzPickle):
     def bottom_block_pos(self):
         body_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_BODY, f'{self.env_cfg.block_bottom.block_name}_main')
         return self.data.xpos[body_id]
+
+    @property
+    def current_timestep(self):
+        return self._current_timestep
     
     def _get_site_pos(self, siteName):
         # _id = self.model.site_names.index(siteName)
@@ -156,7 +162,10 @@ class SlidePickupClutterMujocoEnv(gym.Env, EzPickle):
         new_rotation_matrix =  cam_rot @ rotation_z @ rotation_y
         q_wxyz = Rotation.from_matrix((new_rotation_matrix)).as_quat(scalar_first=True)
         return cam_pos, q_wxyz
-
+    
+    def get_current_image(self, cam_name):
+        self.renderer.update_scene(self.data, camera=cam_name)
+        return self.renderer.render()
 
     def create_env_grid(self):
         # TODO(saumya): Add variable obstacles here
@@ -242,7 +251,7 @@ class SlidePickupClutterMujocoEnv(gym.Env, EzPickle):
         block_bottom_body.set('pos', f'{self.env_cfg.block_bottom.initial_pos[0]} {self.env_cfg.block_bottom.initial_pos[1]} {self.block_bottom_z}')
         world.worldbody.append(block_bottom_body)
         world.merge_assets(block_bottom)
-        self.all_mujoco_objects['block_bottom'] = block_bottom
+        self.all_mujoco_objects[self.env_cfg.block_bottom.block_name] = block_bottom
         hor_site = block_bottom.worldbody.find(f"./body/site[@name='{self.env_cfg.block_bottom.block_name}_horizontal_radius_site']")
         self.bottom_hor_rad = string_to_array(hor_site.get("pos"))
 
@@ -252,7 +261,7 @@ class SlidePickupClutterMujocoEnv(gym.Env, EzPickle):
         
         suction_site = new_site(
             name=f"suction_site", 
-            pos=(-self.bottom_hor_rad[0]+0.01, -self.block_bottom_z, 0), 
+            pos=(-self.bottom_hor_rad[0]+0.025, -self.block_bottom_z+0.01, 0), 
             quat=relquat,
             size=(0.01, 0.01, 0.01), 
             rgba=(1, 0, 0, 1)
@@ -269,7 +278,7 @@ class SlidePickupClutterMujocoEnv(gym.Env, EzPickle):
         block_top_body.set('pos', f'{self.env_cfg.block_top.initial_pos[0]} {self.env_cfg.block_top.initial_pos[1]} {self.block_top_z}')
         world.worldbody.append(block_top_body)
         world.merge_assets(block_top)
-        self.all_mujoco_objects['block_top'] = block_top
+        self.all_mujoco_objects[self.env_cfg.block_top.block_name] = block_top
 
         self.object_z = []
         for obj_name, obj_pos in zip(self.env_cfg.objects.names, self.env_cfg.objects.initial_poses):
@@ -366,7 +375,7 @@ class SlidePickupClutterMujocoEnv(gym.Env, EzPickle):
 
         if self.env_cfg.randomize_locations:
             sample = self.composite_sampler.sample()
-            for i, obj_name in enumerate(self.all_object_names):
+            for i, obj_name in enumerate(self.all_blocks_object_names):
                 states[:, i*6:i*6+3] = np.array(sample[obj_name][0])
         else:
             states[:, 0:2] = self.env_cfg.block_bottom.initial_pos
@@ -446,9 +455,6 @@ class SlidePickupClutterMujocoEnv(gym.Env, EzPickle):
         # mujoco.mj_forward(self.model, self.data)
 
         self.ee_pos_tm1 = self.ee_pos.copy()
-        self.ee_pos_t = self.ee_pos.copy()
-        self.ee_vel_t = (self.ee_pos_t-self.ee_pos_tm1)/self.dt
-
         curr_state = self.get_current_state()
 
         self.safety_set_top_low = curr_state[12:15] + self.env_cfg.block_top.safety_set.low
@@ -457,7 +463,12 @@ class SlidePickupClutterMujocoEnv(gym.Env, EzPickle):
         self.target_set_low = curr_state[6:9] + self.env_cfg.block_bottom.target_set.low
         self.target_set_high = curr_state[6:9] + self.env_cfg.block_bottom.target_set.high
 
-
+        if self.env_cfg.reset_grasped:
+            while not self.suction_gripper_active:
+                target_pos = self.get_suction_target()
+                action = target_pos - self.ee_pos
+                self.step(action)
+            self._current_timestep = 0
         return curr_state
 
     def get_cost(self, l_x, g_x, success, fail):
@@ -519,6 +530,12 @@ class SlidePickupClutterMujocoEnv(gym.Env, EzPickle):
             done = np.logical_or(fail, success)
         elif self.doneType == 'all':
             done = np.logical_or(np.logical_or(fail, success), self.check_within_env(state))
+            if fail:
+                print(f'=====Done: Fail=====')
+            if success:
+                print(f'=====Done: Success=====')
+            if self.check_within_env(state):
+                print(f'=====Done: Outside env=====')
         else:
             raise ValueError("invalid done type!")
         return done
@@ -548,8 +565,9 @@ class SlidePickupClutterMujocoEnv(gym.Env, EzPickle):
                 self._did_see_sim_exception = True
 
     def get_current_state(self):
-        xt = np.append(self.ee_pos_t, self.ee_vel_t)
-        for i, body_name in enumerate(self.all_object_names):
+        ee_vel_t = (self.ee_pos-self.ee_pos_tm1)/self.dt
+        xt = np.append(self.ee_pos, ee_vel_t)
+        for i, body_name in enumerate([self.env_cfg.block_bottom.block_name, self.env_cfg.block_top.block_name] + self.rel_obj_names):
             body_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_BODY, f'{body_name}_main')
             body_state = np.append(self.data.xpos[body_id], self.data.qvel[self.robot_dof+i*6: self.robot_dof+i*6+3])
             xt = np.append(xt, body_state)
@@ -563,6 +581,9 @@ class SlidePickupClutterMujocoEnv(gym.Env, EzPickle):
             g1 = mujoco.mj_id2name(self.model, mujoco.mjtObj.mjOBJ_GEOM, contact.geom1)
             g2 = mujoco.mj_id2name(self.model, mujoco.mjtObj.mjOBJ_GEOM, contact.geom2)
 
+            if (g1 is None) or (g2 is None):
+                continue
+
             if (g1 in self.gripper.contact_geoms) and (self.env_cfg.block_bottom.block_name in g2):
                 return True
 
@@ -571,13 +592,12 @@ class SlidePickupClutterMujocoEnv(gym.Env, EzPickle):
             
         return False
 
-
     def check_suction_grasp(self):
         grasp_object_idx = 0
         if self.check_contact_slide() and not self.suction_gripper_active:
             
             # body1_name = "gripper0_eef"
-            # body2_name = f"{self.all_object_names[grasp_object_idx]}_main"
+            # body2_name = f"{self.all_blocks_object_names[grasp_object_idx]}_main"
             # body1_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_BODY, body1_name)
             # body2_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_BODY, body2_name)
             # relpos = self.bottom_block_pos - self.ee_pos
@@ -603,7 +623,7 @@ class SlidePickupClutterMujocoEnv(gym.Env, EzPickle):
             # self.model.eq_objtype[neq-1] = 1 # body
             # self.suction_gripper_active = True
 
-            print([mujoco.mj_id2name(self.model, mujoco.mjtObj.mjOBJ_SITE, i) for i in range(self.model.nsite)])
+            # print([mujoco.mj_id2name(self.model, mujoco.mjtObj.mjOBJ_SITE, i) for i in range(self.model.nsite)])
 
             site1_name = "gripper0_grip_site"
             site2_name = "suction_site"
@@ -624,23 +644,22 @@ class SlidePickupClutterMujocoEnv(gym.Env, EzPickle):
     # == Dynamics ==
     def step(self, action):
         # self.do_simulation(np.concatenate([action.flatten(), np.zeros(3)])) # move blocks directly
+        xt = self.get_current_state()
         self.ee_pos_tm1 = self.ee_pos.copy()
 
-        xt = self.get_current_state()
         fail, g_x = self.check_failure(xt.reshape(1,-1))
         success, l_x = self.check_success(xt.reshape(1,-1))
         done = self.get_done(xt.reshape(1,-1), success, fail)[0]
+        # print(f't={self._current_timestep} {success=} {fail=} {done=}')
         cost = self.get_cost(l_x, g_x, success, fail)[0]
         info = {"g_x": g_x[0], "l_x": l_x[0]}
 
         self.set_xyz_action(action[:3])
-        self.do_simulation([-action[-1], action[-1]])
+        self.do_simulation([-1, 1]) # Gripper always closed
         self.check_suction_grasp()
-
-        self.ee_pos_t = self.ee_pos.copy()
-        self.ee_vel_t = (self.ee_pos_t-self.ee_pos_tm1)/self.dt
         
         xtp1 = self.get_current_state()
+        self._current_timestep += 1
         return xtp1, cost, done, info
 
     def render(self):
@@ -652,44 +671,52 @@ class SlidePickupClutterMujocoEnv(gym.Env, EzPickle):
         # target_pos[0] = target_pos[0] - self.bottom_hor_rad[0] + 0.03
 
         target_pos = self._get_site_pos('suction_site')
-                
+
+        site_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_SITE, 'placeSiteB')
+        self.model.site_pos[site_id] = target_pos             
         return target_pos
 
     def get_action(self):
-        action = np.zeros(4)
-        action[3] = 1.0
+        action = np.zeros(3)
         if self.suction_gripper_active:
-            action[:3] = [-0.2, 0, 0.1]
-            # action[0] = 0
-            print("suction active")
+            action[:3] = [-0.4, 0, 0.1]
         else:
             target_pos = self.get_suction_target()
             action[:3] = target_pos - self.ee_pos
-
-            site_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_SITE, 'placeSiteB')
-            self.model.site_pos[site_id] = target_pos
             # viewer.launch(self.model, self.data)
 
         return action
 
+    def get_object_bounds(self, obj_name):
+        hor_site = self.all_mujoco_objects[obj_name].worldbody.find(f"./body/site[@name='{obj_name}_horizontal_radius_site']")
+        obj_hor_rad = string_to_array(hor_site.get("pos"))
+        obj_hor_rad[2] = 0
+
+        obj_low = -1*obj_hor_rad
+        obj_high = 1*obj_hor_rad
+
+        bottom_site = self.all_mujoco_objects[obj_name].worldbody.find(f"./body/site[@name='{obj_name}_bottom_site']")
+        obj_low[2] = string_to_array(bottom_site.get("pos"))[2]
+
+        top_site = self.all_mujoco_objects[obj_name].worldbody.find(f"./body/site[@name='{obj_name}_top_site']")
+        obj_high[2] = string_to_array(top_site.get("pos"))[2]
+
+        return obj_low, obj_high
+        
     def collision_distance(self, obj1_name, obj1_state, obj2_name, obj2_state):
         # g(x)>0 is obstacle
-        hor_site = self.all_mujoco_objects[obj1_name].worldbody.find(f"./body/site[@name='{obj1_name}_horizontal_radius_site']")
-        obj1_hor_rad = string_to_array(hor_site.get("pos"))
 
-        hor_site = self.all_mujoco_objects[obj2_name].worldbody.find(f"./body/site[@name='{obj2_name}_horizontal_radius_site']")
-        obj2_hor_rad = string_to_array(hor_site.get("pos"))
+        obj1_low, obj1_high = self.get_object_bounds(obj1_name)
+        obj2_low, obj2_high = self.get_object_bounds(obj2_name)
 
-        obstacle_high = obj1_state[...,:3] + obj1_hor_rad + obj2_hor_rad
-        obstacle_low = obj1_state[...,:3] - obj1_hor_rad - obj2_hor_rad
+        obstacle_high = obj1_state[...,:3] + obj1_high - obj2_low + self.env_cfg.thresh
+        obstacle_low = obj1_state[...,:3] + obj1_low - obj2_high - self.env_cfg.thresh
         obstacle = signed_dist_fn_rectangle(
             obj2_state[...,:3], 
             obstacle_low, 
             obstacle_high,
             obstacle=True)
-
-        # collision_dist = self.all_mujoco_objects[0].horizontal_radius + self.all_mujoco_objects[2+i].horizontal_radius
-        # obstacle = (self.env_cfg.thresh + collision_dist) - np.linalg.norm(s[...,6:9]-s[...,18+i*6:18+i*6+3])
+        # print(f'{obstacle=}')
         return obstacle
 
     def safety_margin(self, s, safety_set_top_low=None, safety_set_top_high=None):
@@ -703,23 +730,34 @@ class SlidePickupClutterMujocoEnv(gym.Env, EzPickle):
         if safety_set_top_high is None:
             safety_set_top_high = top_block_pos + self.env_cfg.block_top.safety_set.high
 
-        lower_boundary = np.max(safety_set_top_low - top_block_pos, axis=-1)
-        upper_boundary = np.max(top_block_pos - safety_set_top_high, axis=-1)
-        gx = np.maximum(lower_boundary, upper_boundary) # top block safety
+        # lower_boundary = np.max(safety_set_top_low - top_block_pos, axis=-1)
+        # upper_boundary = np.max(top_block_pos - safety_set_top_high, axis=-1)
+        # gx = np.maximum(lower_boundary, upper_boundary) # top block safety
 
-        # # gripper should not hit top block
-        # obstacle_high = s[...,12:15] + self.env_cfg.block_top.size
-        # obstacle_low = s[...,12:15] - self.env_cfg.block_top.size
-        # obstacle = signed_dist_fn_rectangle(
-        #     s[...,:3], 
-        #     obstacle_low, 
-        #     obstacle_high,
-        #     obstacle=True)
-        # gx = np.maximum(gx, obstacle)
+        # top block safety: stay within safety bounds
+        gx = signed_dist_fn_rectangle(
+            top_block_pos, 
+            safety_set_top_low, 
+            safety_set_top_high)
+
+        if gx[0]>0:
+            print(f'======Done: Top block unsafe ======')
+            
+        if not self.env_cfg.reset_grasped:
+            # gripper should not hit top block
+            obj_low, obj_high = self.get_object_bounds(self.env_cfg.block_top.block_name)
+            obstacle_high = s[...,12:15] + obj_high + self.env_cfg.thresh
+            obstacle_low = s[...,12:15] + obj_low - self.env_cfg.thresh
+            obstacle = signed_dist_fn_rectangle(
+                s[...,:3], 
+                obstacle_low, 
+                obstacle_high,
+                obstacle=True)
+            gx = np.maximum(gx, obstacle)
 
         # obstacle avoidance between bottom block and distractors
-        for i, obj_name in enumerate(self.env_cfg.objects.names):
-            obstacle = self.collision_distance('block_bottom', s[...,6:9], obj_name, s[...,18+i*6:18+i*6+3])
+        for i, obj_name in enumerate(self.rel_obj_names):
+            obstacle = self.collision_distance(self.env_cfg.block_bottom.block_name, s[...,6:9], obj_name, s[...,18+i*6:18+i*6+3])
             gx = np.maximum(gx, obstacle)
         
         gx = self.scaling_safety * gx
@@ -748,19 +786,18 @@ class SlidePickupClutterMujocoEnv(gym.Env, EzPickle):
 
         if target_set_high is None:
             target_set_high = bottom_block_pos + self.env_cfg.block_bottom.target_set.high
-        
-        # site_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_SITE, 'placeSiteB')
-        # self.model.site_pos[site_id] = (target_set_high+target_set_low)/2
 
-        # lx = np.linalg.norm(s[...,:6]-goal, axis=-1) - self.env_cfg.thresh
+        # block bottom goal
+        lx = signed_dist_fn_rectangle(
+            bottom_block_pos, 
+            target_set_low, 
+            target_set_high)
 
-        if self.suction_gripper_active:
-            lower_boundary = np.max(target_set_low - bottom_block_pos, axis=-1)
-            upper_boundary = np.max(bottom_block_pos - target_set_high, axis=-1)
-            lx = np.maximum(lower_boundary, upper_boundary)
-        else:
+        if not self.env_cfg.reset_grasped:
+            # Goto suction target
             target_pos = self.get_suction_target()
-            lx = np.linalg.norm(s[...,:3]-target_pos, axis=-1) - self.env_cfg.thresh
+            suction_lx = np.linalg.norm(s[...,:3]-target_pos, axis=-1) - self.env_cfg.thresh
+            lx = np.maximum(suction_lx, lx)
 
         lx = self.scaling_target * lx
         if 'reward' in self.return_type: # l(x)>0 is target

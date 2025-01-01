@@ -6,7 +6,13 @@ def signed_dist_fn_rectangle(grid_x, x_target_min, x_target_max, obstacle=False,
     signed_distance_grid = np.max(dist_from_walls, axis=-1)
     if obstacle:
         signed_distance_grid = -1*signed_distance_grid
+    return signed_distance_grid
 
+def signed_dist_fn_rectangle_obstacle(grid_x, x_target_min, x_target_max, obstacle=True):
+    # Compute distances to each edge of the rectangle
+    # g(x)>0 is obstacle
+    dist_from_walls = np.minimum(grid_x - x_target_min, x_target_max - grid_x)
+    signed_distance_grid = np.min(dist_from_walls, axis=-1)
     return signed_distance_grid
 
 def create_grid(x_min, x_max, N_x):
@@ -87,3 +93,113 @@ def check_contact(env, geoms_1, geoms_2=None):
             return True
     return False
 
+
+from PIL import Image, ImageDraw, ImageFont
+import pillow_heif, os, cv2
+
+def save_png_from_heic(img_path):
+    heic_files = [f for f in os.listdir(img_path) if f.lower().endswith(".heic")]
+    for i, heic_file in enumerate(heic_files):
+        file = pillow_heif.open_heif(img_path+heic_file)
+        image = Image.frombytes(
+            file.mode, 
+            file.size, 
+            file.data, 
+            "raw"
+        )
+        scale = 0.1  # Scale down to 50%
+        new_width = int(image.width * scale)
+        new_height = int(image.height * scale)
+        low_res_image = image.resize((new_width, new_height), Image.Resampling.LANCZOS)
+        low_res_image.save(img_path+f"img_low_res_{i}.png", "PNG")
+
+def append_and_save_png(img_path, png_files, save_img_name):
+    images = [Image.open(img_path+png_file) for png_file in png_files]
+
+    total_width = sum(img.width for img in images)
+    max_height = max(img.height for img in images)
+
+    # Create a blank canvas
+    combined_image = Image.new("RGBA", (total_width, max_height))
+
+    # Paste images onto the canvas
+    x_offset = 0
+    for i, img in enumerate(images):
+
+        draw = ImageDraw.Draw(img)
+        text = f"Image {i}"
+        position = (10, 10)  # Top-left corner for text
+        text_color = (255, 255, 255)  # White color (R, G, B)
+        # Add the text to the image
+        draw.text(position, text, fill=text_color, font=ImageFont.load_default())
+        # draw.text(position, text, fill=text_color, font=ImageFont.truetype("arial.ttf", 40))
+
+        combined_image.paste(img, (x_offset, 0))
+        x_offset += img.width
+
+    # Save the combined image
+    combined_image.save(img_path+f"{save_img_name}.png", "PNG")
+
+def mov_to_pngs(mov_path):
+    output_folder = os.path.dirname(mov_path)
+    cap = cv2.VideoCapture(mov_path)
+
+    if not cap.isOpened():
+        print("Error: Could not open the video file.")
+        return
+    
+    scale_factor = 0.25
+    frame_count = 0
+    while True:
+        ret, frame = cap.read()
+        if not ret:
+            break  # End of video
+        
+        if frame_count < 100:
+            frame_count += 1
+            continue
+
+        if frame_count % 5 == 0:
+            original_height, original_width = frame.shape[:2]
+            new_width = int(original_width * scale_factor)
+            new_height = int(original_height * scale_factor)
+            new_resolution = (new_width, new_height)
+
+            resized_frame = cv2.resize(frame, new_resolution)
+            # Save each frame as a PNG
+            frame_filename = os.path.join(output_folder, f"frame_{frame_count:04d}.png")
+            cv2.imwrite(frame_filename, resized_frame)
+        frame_count += 1
+    
+    cap.release()
+    print(f"Saved {frame_count} frames to {output_folder}")
+
+import textwrap
+def add_text_to_img(img, text):
+    # Font properties
+    font = cv2.FONT_HERSHEY_SIMPLEX
+    font_scale = 0.3
+    font_thickness = 1
+    text_color = (0, 0, 0)  # Black text
+
+    text_height = cv2.getTextSize("Sample", font, font_scale, font_thickness)[0][1]
+
+    line_spacing = 5  # Space between lines
+    # Split the text into lines and wrap each line
+    max_width = img.shape[1] - 5  # Account for some padding
+    wrapped_lines = []
+    for line in text.splitlines():
+        wrapped_lines.extend(textwrap.wrap(line, width=max_width // 5))  # Estimate characters per line
+
+    num_lines = len(wrapped_lines)
+    new_height = img.shape[0] + num_lines * (text_height + line_spacing)
+
+    canvas = np.ones((new_height, img.shape[1], 3), dtype=np.uint8) * 255  
+    canvas[:img.shape[0], :img.shape[1]] = img
+
+    # Draw each line of text below the image
+    y_offset = img.shape[0] + text_height # Start position below the image
+    for line in wrapped_lines:
+        cv2.putText(canvas, line, (10, y_offset), font, font_scale, text_color, font_thickness, lineType=cv2.LINE_AA)
+        y_offset += text_height + line_spacing
+    return canvas

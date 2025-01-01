@@ -3,6 +3,7 @@ import base64
 
 from openai import OpenAI
 from pydantic import BaseModel
+from safety_rl_manip.utils import save_png_from_heic, append_and_save_png, mov_to_pngs
 
 def encode_image(image_path):
   with open(image_path, "rb") as image_file:
@@ -115,89 +116,7 @@ class SafePlanner:
 
         return plan
 
-from PIL import Image, ImageDraw, ImageFont
-import pillow_heif
-from pathlib import Path
-import os
 
-def save_png_from_heic(img_path):
-    heic_files = [f for f in os.listdir(img_path) if f.lower().endswith(".heic")]
-    for i, heic_file in enumerate(heic_files):
-        file = pillow_heif.open_heif(img_path+heic_file)
-        image = Image.frombytes(
-            file.mode, 
-            file.size, 
-            file.data, 
-            "raw"
-        )
-        scale = 0.1  # Scale down to 50%
-        new_width = int(image.width * scale)
-        new_height = int(image.height * scale)
-        low_res_image = image.resize((new_width, new_height), Image.Resampling.LANCZOS)
-        low_res_image.save(img_path+f"img_low_res_{i}.png", "PNG")
-
-def append_and_save_png(img_path, png_files):
-    images = [Image.open(img_path+png_file) for png_file in png_files]
-
-    total_width = sum(img.width for img in images)
-    max_height = max(img.height for img in images)
-
-    # Create a blank canvas
-    combined_image = Image.new("RGBA", (total_width, max_height))
-
-    # Paste images onto the canvas
-    x_offset = 0
-    for i, img in enumerate(images):
-
-        draw = ImageDraw.Draw(img)
-        text = f"Image {i}"
-        position = (10, 10)  # Top-left corner for text
-        text_color = (255, 255, 255)  # White color (R, G, B)
-        # Add the text to the image
-        draw.text(position, text, fill=text_color, font=ImageFont.load_default())
-        # draw.text(position, text, fill=text_color, font=ImageFont.truetype("arial.ttf", 40))
-
-        combined_image.paste(img, (x_offset, 0))
-        x_offset += img.width
-
-    # Save the combined image
-    combined_image.save(img_path+"full_traj_franka_teapot_teddy.png", "PNG")
-
-import cv2
-def mov_to_pngs(mov_path):
-    output_folder = os.path.dirname(mov_path)
-    cap = cv2.VideoCapture(mov_path)
-
-    if not cap.isOpened():
-        print("Error: Could not open the video file.")
-        return
-    
-    scale_factor = 0.25
-    frame_count = 0
-    while True:
-        ret, frame = cap.read()
-        if not ret:
-            break  # End of video
-        
-        if frame_count < 100:
-            frame_count += 1
-            continue
-
-        if frame_count % 5 == 0:
-            original_height, original_width = frame.shape[:2]
-            new_width = int(original_width * scale_factor)
-            new_height = int(original_height * scale_factor)
-            new_resolution = (new_width, new_height)
-
-            resized_frame = cv2.resize(frame, new_resolution)
-            # Save each frame as a PNG
-            frame_filename = os.path.join(output_folder, f"frame_{frame_count:04d}.png")
-            cv2.imwrite(frame_filename, resized_frame)
-        frame_count += 1
-    
-    cap.release()
-    print(f"Saved {frame_count} frames to {output_folder}")
-    
 if __name__ == "__main__":
 
     # mov_to_pngs("/home/saumyas/Projects/safe_control/safety_rl_manip/outputs/gpt_safety/slide_pickup/slide_pick_obs/slide_pick_obs.MOV")
@@ -212,7 +131,7 @@ if __name__ == "__main__":
     # png_files = ["frame_0290.png", "frame_0305.png", "frame_0310.png", "frame_0325.png"]
     # png_files = ["frame_0700.png", "frame_0705.png", "frame_0710.png", "frame_0720.png"]
     png_files = ["rgb_slide_pickup_clutter_t_152_0_front.png", "rgb_slide_pickup_clutter_t_164_0_front.png", "rgb_slide_pickup_clutter_t_180_0_front.png", "rgb_slide_pickup_clutter_t_190_0_front.png"]
-    append_and_save_png(img_path, png_files)
+    append_and_save_png(img_path, png_files, 'full_traj_franka_teapot_teddy')
     import ipdb; ipdb.set_trace()
 
     png_files = [f for f in os.listdir(img_path) if (f.lower().endswith(".png") and 'full_traj_franka_teapot_teddy' in f.lower())]

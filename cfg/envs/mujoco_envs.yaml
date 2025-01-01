@@ -138,11 +138,11 @@ slide_pickup_clutter_mujoco_env-v0:
   img_size: [256, 256]
   goal: [0.6, 0.6, 0.5]
   thresh: 0.01
-  control_low: [-100.,-100.,-100.]
-  control_high: [100.,100.,100.]
+  control_low: [-1.,-1.,-1.]
+  control_high: [1.,1.,1.]
   num_eval_trajs: 20
-  n_rel_objs: 3
-  action_scale: [0.05, 0.05, 0.02]
+  n_rel_objs: 1
+  action_scale: [0.02, 0.02, 0.02]
   robot_base_pos: [0, 0.0,0.0]
   init_arm_qpos: [1.5,0,0,-1.5,0.0,1.5,0.0] #[1.52613082e+00,  1.86419679e-01,  4.72079341e-02, -1.91944351e+00, -1.01665263e-02,  2.10563729e+00,  2.89773222e+00] # [1.5,0,0,-1.5,0.0,1.5,0.0]
   init_wrist_qpos: [0.0]
@@ -156,6 +156,7 @@ slide_pickup_clutter_mujoco_env-v0:
     low: [-0.69, 0.2, -0.2] #table bounds : table center is [0., 0.6]
     high: [0.69, 0.99, 1.0] #table bounds
   randomize_locations: True
+  reset_grasped: False
   block_bottom:
     block_name: 'purple_lego_set' # 'red_lunch_pack' # 'block_bottom', 'yellow_cereal_pack'
     mass: 0.5
@@ -166,7 +167,7 @@ slide_pickup_clutter_mujoco_env-v0:
     restitution: 0.0 # 0.99 bouncy
     target_set:
       low: [-5.0, -0.3, -0.5] # added to initial bottom block state to get target boundary low [-0.1, -0.1, -0.1]
-      high: [-0.25, 0.3, 0.5] # added to initial bottom block state to get target boundary high [0.1, 0.1, 0.1]
+      high: [-0.5, 0.3, 0.5] # added to initial bottom block state to get target boundary high [0.1, 0.1, 0.1]
     state_ranges: # x, y
       low: [0.0, 0.45] 
       high: [0.5, 0.75]
@@ -189,12 +190,12 @@ slide_pickup_clutter_mujoco_env-v0:
   objects:
     names: ['squirrel'] # ['squirrel', 'blockA', 'blockB','blue_mug', 'supplement0', 'cardboard', 'blue_lunch_pack', 'red_lunch_pack', 'white_cereal_pack', 'yellow_cereal_pack', 'red_cereal']
     state_ranges: # x, y
-      low: [-0.8, 0.3]
-      high: [0.8, 0.9]
+      low: [-0.7, 0.3]
+      high: [0.5, 0.9]
     initial_poses: 
-      - [-0.3, 0.6]
-      - [0.0, 0.85]
-      - [-0.5, 0.4]
+      - [-0.5, 0.6]
+      - [-0.2, 0.85]
+      - [-0.4, 0.4]
       - [0.5, 0.8]
       - [0.0, 0.8]
     N_x: [50, 50]

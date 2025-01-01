@@ -1,11 +1,11 @@
-debug: True
+debug: False
 gpu: 0
 seed: 0
 tag: ${now:%Y-%m-%d-%H-%M-%S}
-run_name: "train_DDPG_pickup_slide_panda_mujoco_${train_cfg.mode}" 
+run_name: "train_panda_DDPG_pickup_slide_mujoco_${train_cfg.mode}" 
 # variant: ${train_cfg.warmup_cfg.warmup_type}_UpdatePiType_${train_cfg.warmup_cfg.warmupQ_expert.update_pi_type}
 # variant: 'no_terminal_gammaSch150_lrSch'
-variant: 'test'
+variant: 'avoid_top_block'
 
 hydra:
   run:
@@ -24,7 +24,7 @@ wandb:
   name: ${run_name}_${variant}
 wandb_resume_id: null
 
-env_name: "slide_pickup_obstacles_mujoco_env-v0"
+env_name: "slide_pickup_clutter_mujoco_env-v0"
 envs:
   slide_pickup_clutter_mujoco_env-v0:
     doneType: 'all'
@@ -101,7 +101,7 @@ eval_cfg:
   seed: ${seed}
   eval_value_fn: False
   test_value_fn: False
-  num_test_episodes: 200
+  num_test_episodes: 100
   eval_safe_rollouts: True
   num_eval_episodes: 5000
   save_rollout_gifs: True  

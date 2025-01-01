@@ -57,6 +57,7 @@ class SlidePickupObstaclesMujocoEnv(gym.Env, EzPickle):
 
         # Will visualize the value function in x-y only for initial positions of bottom block
         self.N_x = self.env_cfg.block_bottom.N_x
+        self.front_cam_name = 'left_cap3'
         
         self.create_env_grid()
         

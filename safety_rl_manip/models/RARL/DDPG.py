@@ -663,11 +663,18 @@ class DDPG(torch.nn.Module):
             v = v.reshape(*self.test_env.grid_x.shape[:-1])
         return v
 
-    def do_visualization_rollouts(self, save_rollout_gifs=False):
+    def do_visualization_rollouts(self, num_visualization_rollouts=20, save_rollout_gifs=False):
         trajs = []
-        for init_s in self.test_env.visual_initial_states:
+        if self.test_env.visual_initial_states is not None:
+            num_visualization_rollouts = len(self.test_env.visual_initial_states)
+
+        for idx in range(num_visualization_rollouts):
+            init_s = None
+            if self.test_env.visual_initial_states is not None:
+                init_s = self.test_env.visual_initial_states[idx]
+
             rollout, at_all, imgs = [], [], []
-            o, d, ep_ret, ep_len = self.test_env.reset(init_s), False, 0, 0
+            o, d, ep_ret, ep_len = self.test_env.reset(start=init_s), False, 0, 0
             rollout.append(o)
 
             pred_v = self.ac_targ.q(
@@ -687,7 +694,7 @@ class DDPG(torch.nn.Module):
                 at_all.append(at)
                 rollout.append(o)
                 if save_rollout_gifs:
-                    self.test_env.renderer.update_scene(self.test_env.data, camera='left_cap3') 
+                    self.test_env.renderer.update_scene(self.test_env.data, camera=self.test_env.front_cam_name) 
                     img = self.test_env.renderer.render()
                     imgs.append(img)
                 ep_len += 1
@@ -709,7 +716,7 @@ class DDPG(torch.nn.Module):
         self.test_env.epoch = self.epochs-1
 
         set_seed(eval_cfg.seed)
-        trajs = self.do_visualization_rollouts(save_rollout_gifs=eval_cfg.save_rollout_gifs)
+        trajs = self.do_visualization_rollouts(num_visualization_rollouts=eval_cfg.num_visualization_rollouts, save_rollout_gifs=eval_cfg.save_rollout_gifs)
 
         if eval_cfg.eval_value_fn:
             if self.env_cfg.is_GT_value:

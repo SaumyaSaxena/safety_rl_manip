@@ -3,7 +3,7 @@ debug: True # TODO: always true since we are not using wandb during eval
 
 eval_cfg:
   gpu: 0
-  seed: 30
+  seed: 2
   wandb_load:
     run_path: iam-lab/safety_rl_manip/f2x73e2f
     file: model/step_191999_test_return_-12.60_succRate_0.34.pth
@@ -12,3 +12,8 @@ eval_cfg:
   save_rollout_gifs: True
   num_visualization_rollouts: 20
   num_eval_episodes: 1000
+
+vlm_cfg:
+  vlm_type: 'gpt-4o-2024-08-06'
+  num_frames: 4
+  subsample_freq: 4
