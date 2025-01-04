@@ -80,15 +80,27 @@ def main():
         vlm_safety = SafePlanner(vlm_cfg.vlm_type, updated_env_cfg['objects']['names'])
 
     failure_analysis = {k:0 for k in agent.test_env.all_failure_modes}
-    failure_analysis['num_episodes'] = eval_cfg.num_visualization_rollouts
     failure_analysis['hit_irrelevant_obj'] = 0
+    FP, FN, TP, TN, num_pred_success, num_gt_success = 0, 0, 0, 0, 0, 0
     for i in trange(eval_cfg.num_visualization_rollouts, desc="Relevant obj testing"):
         
         result_folder = os.path.join(agent.figureFolder, f"{i}")
         os.makedirs(result_folder, exist_ok=True)
-
+        
         imgs, imgs_obj_label = [], []
         o, d = agent.test_env.reset(), False
+
+        # Check if state is feasible
+        # pred_success = False
+        # for obj_name in agent.test_env.env_cfg.objects.names:
+        #     agent.test_env.update_relevant_objs([obj_name])
+        #     o = agent.test_env.get_current_state()
+        #     pred_v = agent.ac_targ.q(
+        #         torch.from_numpy(o).float().to(agent.device), 
+        #         agent.ac_targ.pi(torch.from_numpy(o).float().to(agent.device))).detach().cpu().numpy()
+        #     pred_success = pred_v > 0. or pred_success
+        # num_pred_success += pred_success
+
         imgs.append(agent.test_env.get_current_image(agent.test_env.front_cam_name))
 
         while not(d or (agent.test_env.current_timestep == agent.max_ep_len)):
@@ -118,17 +130,40 @@ def main():
             o, _, d, _ = agent.test_env.step(agent.get_action(o, 0))
             imgs.append(agent.test_env.get_current_image(agent.test_env.front_cam_name))
 
+        gt_success = agent.test_env.failure_mode=='success'
+        num_gt_success += gt_success
         if d:
             failure_analysis[agent.test_env.failure_mode] += 1
             if agent.test_env.failure_mode == 'hit_obstacle' and agent.test_env.colliding_obj_name not in objs:
                 failure_analysis['hit_irrelevant_obj'] += 1
+        
+        FP += np.sum(np.logical_and((gt_success == False), (pred_success == True)))
+        FN += np.sum(np.logical_and((gt_success == True), (pred_success == False)))
+        TP += np.sum(np.logical_and((gt_success == True), (pred_success == True)))
+        TN += np.sum(np.logical_and((gt_success == False), (pred_success == False)))
 
         filename = os.path.join(result_folder, f'test_slide_pickup_reset_grasped_{agent.test_env.failure_mode}_{agent.test_env.colliding_obj_name}.gif')
         imageio.mimsave(filename, imgs_obj_label[::4], duration=200)
 
+    false_pos_rate = FP/(FP+TN)
+    false_neg_rate = FN/(FN+TP)
+    success_rate = num_gt_success/eval_cfg.num_visualization_rollouts
+    info = {
+        'Total_num_episodes': eval_cfg.num_visualization_rollouts,
+        'False_positive_rate': false_pos_rate,
+        'False_negative_rate': false_neg_rate,
+        'FP': float(FP),
+        'FN': float(FN),
+        'TP': float(TP),
+        'TN': float(TN),
+        'num_pred_success': num_pred_success,
+        'num_gt_success': num_gt_success,
+        'success_rate': float(success_rate),
+        'failure_analysis': failure_analysis,
+    }
     fname = os.path.join(agent.outFolder, 'results_rollouts.json')
     with open(fname, "w") as f:
-        json.dump(failure_analysis, f, indent=4)
+        json.dump(info, f, indent=4)
 
 if __name__ == "__main__":
     main()

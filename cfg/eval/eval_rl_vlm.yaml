@@ -8,13 +8,13 @@ eval_cfg:
     # run_path: iam-lab/safety_rl_manip/f2x73e2f # lagrange
     # file: model/step_191999_test_return_-12.60_succRate_0.34.pth
     run_path: iam-lab/safety_rl_manip/o4qxn8mr # RA
-    file: model/step_159999_test_return_-2.09_succRate_0.73.pth
+    file: model/step_383999_test_return_0.76_succRate_0.91.pth
   eval_value_fn: False
   eval_safe_rollouts: True
   save_rollout_gifs: True
   num_visualization_rollouts: 30
   num_eval_episodes: 1000
-  relevant_obj_updater: 'vlm' # 'vlm', 'none', 'knn'
+  relevant_obj_updater: 'knn' # 'vlm', 'none', 'knn'
 
 vlm_cfg:
   vlm_type: 'gpt-4o-2024-08-06'

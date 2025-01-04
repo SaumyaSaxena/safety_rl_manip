@@ -104,4 +104,5 @@ eval_cfg:
   num_test_episodes: 100
   eval_safe_rollouts: True
   num_eval_episodes: 5000
-  save_rollout_gifs: True  
+  save_rollout_gifs: True
+  num_visualization_rollouts: 20
