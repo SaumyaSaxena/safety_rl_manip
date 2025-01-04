@@ -176,6 +176,13 @@ def mov_to_pngs(mov_path):
 
 import textwrap
 def add_text_to_img(img, text):
+
+    if isinstance(img, str):
+        img = cv2.imread(img)
+        img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+    elif not isinstance(img, np.ndarray):
+        raise ValueError("Input must be either a file path (str) or a NumPy array.")
+
     # Font properties
     font = cv2.FONT_HERSHEY_SIMPLEX
     font_scale = 0.3

@@ -1,8 +1,12 @@
 from enum import Enum
 import base64
+import os
+from PIL import Image
 
 from openai import OpenAI
 from pydantic import BaseModel
+from safety_rl_manip.envs.utils import add_text_to_img
+
 
 def encode_image(image_path):
   with open(image_path, "rb") as image_file:
@@ -11,7 +15,6 @@ def encode_image(image_path):
 # class TabletopObjects(str, Enum):
 #     soft_toy = "soft_toy"
 #     glass_kettle = "glass_kettle"
-
 
 
 def create_planner_response(object_list):
@@ -41,9 +44,11 @@ class SafePlanner:
     def agent_role_prompt(self):
         prompt = """
         You are an excellent safe planning agent for dynamic tasks.
-        Ypu are given a task description and a sequence of images showing the trajectory followed by the robot and the objects so far, 
+        You are given a task description and a sequence of images showing the trajectory followed by the robot and the objects so far,
+        the last image showing the current state.
         You are required to figure out the safety-critical objects on a cluttered table. 
-        Under the 'safety' criteria you consider the objects that you need to move carefully around to prevent damage, spillage, collision, or other safety critical criteria.
+        Under the 'safety' criteria you consider the objects that you need to move carefully around to prevent damage, spillage, collision, 
+        or other safety critical criteria.
         Provide explanation for why you are choosing these objects and why they are safety critical given the current trajectory. 
         Pay special attention to the robot's trajectory in the sequence of images for choosing objects that can make most probable contacts.
         Also, provide a brief description of the sequence of images, paying attention to the features in the images that are task relevant and safety critical.
@@ -53,7 +58,7 @@ class SafePlanner:
     @property
     def task_prompt(self):
         prompt = """
-            A robot arm needs to slide the purple box from under the yellow box and move towards the edge of the table. 
+            A robot arm needs to slide the purple box from under the yellow box. 
             Other objects are placed on the table and the robot needs to choose which ones to avoid.
         """
         return prompt
@@ -102,3 +107,14 @@ class SafePlanner:
             return None
 
         return plan.parsed
+
+    def get_rel_objects(self, image_path):
+        plan_parsed = self.get_gpt_output(image_path)
+        text, objs = self.get_text_from_parsed_output(plan_parsed)
+
+        img_vlm_out = add_text_to_img(image_path, text)
+        directory, filename = os.path.split(image_path)
+        base, ext = os.path.splitext(filename)
+        Image.fromarray(img_vlm_out).save(os.path.join(directory, f"{base}_vlm_output{ext}"))
+
+        return objs

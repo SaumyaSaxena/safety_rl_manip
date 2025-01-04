@@ -487,8 +487,9 @@ class DDPG(torch.nn.Module):
     def rollout_episodes(self, num_episodes):
         FP, FN, TP, TN, num_pred_success, num_gt_success = 0, 0, 0, 0, 0, 0
         avg_return, avg_ep_len = 0. , 0.
+        failure_analysis = {k:0 for k in self.test_env.all_failure_modes}
         for i in trange(num_episodes, desc="Testing"):
-            o, d, ep_ret, ep_len = self.test_env.reset(), False, 0, 0
+            o, d, ep_ret = self.test_env.reset(), False, 0
 
             pred_v = self.ac_targ.q(
                 torch.from_numpy(o).float().to(self.device), 
@@ -496,17 +497,16 @@ class DDPG(torch.nn.Module):
             pred_success = pred_v > 0.
             
             gt_success = False
-            while not(d or (ep_len == self.max_ep_len)):
+            while not(d or (self.test_env.current_timestep == self.max_ep_len)):
                 o, r, d, _ = self.test_env.step(self.get_action(o, 0))
                 ep_ret += r
-                fail, _ = self.test_env.check_failure(o.reshape(1,self.test_env.n))
-                succ, _ = self.test_env.check_success(o.reshape(1,self.test_env.n))
-                gt_success = np.logical_or(np.logical_and(not fail[0], succ[0]), gt_success)
-                ep_len += 1
             avg_return += ep_ret
-            avg_ep_len += ep_len
+            avg_ep_len += self.test_env.current_timestep
             num_pred_success += pred_success
+            gt_success = self.test_env.failure_mode=='success'
             num_gt_success += gt_success
+            if d:
+                failure_analysis[self.test_env.failure_mode] += 1
 
             FP += np.sum(np.logical_and((gt_success == False), (pred_success == True)))
             FN += np.sum(np.logical_and((gt_success == True), (pred_success == False)))
@@ -530,6 +530,7 @@ class DDPG(torch.nn.Module):
             'num_pred_success': float(num_pred_success),
             'num_gt_success': float(num_gt_success),
             'success_rate': float(success_rate),
+            'failure_analysis': failure_analysis
         }
         return info
 
@@ -700,7 +701,7 @@ class DDPG(torch.nn.Module):
                 ep_len += 1
             trajs.append(np.array(rollout))
             if save_rollout_gifs:
-                file_name = f'eval_traj_{self.mode}_{len(trajs)}_pred_succ_{pred_success}_gt_succ_{gt_success}'
+                file_name = f'eval_traj_{self.mode}_{len(trajs)}_pred_succ_{pred_success}_gt_succ_{gt_success}_{self.test_env.failure_mode}'
                 imageio.mimsave(os.path.join(self.figureFolder, f'{file_name}.gif'), 
                     imgs, duration=ep_len*self.test_env.dt)
                 self.test_env.plot_trajectory(np.stack(rollout,axis=0), np.stack(at_all,axis=0), os.path.join(self.figureFolder, f'{file_name}.png'))

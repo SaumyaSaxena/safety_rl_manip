@@ -38,8 +38,6 @@ class SlidePickupClutterMujocoEnv(gym.Env, EzPickle):
 
         self.all_blocks_object_names = [self.env_cfg.block_bottom.block_name, self.env_cfg.block_top.block_name] + self.env_cfg.objects.names
 
-        self.rel_obj_names = [self.env_cfg.objects.names[0]] # updated by vlm planner
-
         self.N_O = len(self.all_blocks_object_names)
         self.N_objs = len(self.env_cfg.objects.names)
 
@@ -113,6 +111,7 @@ class SlidePickupClutterMujocoEnv(gym.Env, EzPickle):
         # Visualization Parameters
         # self.visual_initial_states = self.sample_initial_state(self.env_cfg.get('num_eval_trajs', 20)) # samples n_all
         self.visual_initial_states = None
+        self.all_failure_modes = ['top_block_oob', 'hit_obstacle', 'out_of_env', 'success']
     
     @property
     def tcp_center(self):
@@ -134,24 +133,36 @@ class SlidePickupClutterMujocoEnv(gym.Env, EzPickle):
     
     @property
     def top_block_pos(self):
-        body_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_BODY, f'{self.env_cfg.block_top.block_name}_main')
         # self.data.subtree_com[body_id]
-        return self.data.xpos[body_id]
+        return self._get_body_pos(self.env_cfg.block_top.block_name)
 
     @property
     def bottom_block_pos(self):
-        body_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_BODY, f'{self.env_cfg.block_bottom.block_name}_main')
-        return self.data.xpos[body_id]
+        return self._get_body_pos(self.env_cfg.block_bottom.block_name)
 
     @property
     def current_timestep(self):
         return self._current_timestep
+
+    @property
+    def dt(self):
+        return self.model.opt.timestep * self.frame_skip
+
+    def update_relevant_objs(self, objs=None):
+        if objs is None:
+            self.rel_obj_names = [self.env_cfg.objects.names[i] for i in range(self.env_cfg.n_rel_objs)]
+        else:
+            self.rel_obj_names = [o for o in objs]
     
     def _get_site_pos(self, siteName):
         # _id = self.model.site_names.index(siteName)
         # return self.data.site_xpos[_id].copy()
         sid = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_SITE, siteName)
         return self.data.site_xpos[sid]
+    
+    def _get_body_pos(self, bodyName):
+        body_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_BODY, f'{bodyName}_main')
+        return self.data.xpos[body_id]
     
     def get_static_cam_pose(self, cam_id):
         cam_pos = self.data.cam_xpos[cam_id]
@@ -440,6 +451,9 @@ class SlidePickupClutterMujocoEnv(gym.Env, EzPickle):
         self._reset_hand()
 
         self._current_timestep = 0
+        self.failure_mode = None
+        self.colliding_obj_name = None
+        self.update_relevant_objs()
 
         if start is None:
             sample_state = self.sample_initial_state(1)[0]
@@ -494,7 +508,7 @@ class SlidePickupClutterMujocoEnv(gym.Env, EzPickle):
             cost[fail] = self.penalty
         return cost
       
-    def check_within_env(self, state):
+    def check_within_env(self, state=None):
         """Checks if the robot is still in the environment.
 
         Args:
@@ -503,19 +517,28 @@ class SlidePickupClutterMujocoEnv(gym.Env, EzPickle):
         Returns:
             bool: True if the agent is not in the environment.
         """
+        if state is None:
+            _ee_pos = self.ee_pos.reshape(1,-1) # shape = (batch, 3)
+            _bottom_block_pos = self.bottom_block_pos.reshape(1,-1) # shape (batch, 3)
+            _top_block_pos = self.top_block_pos.reshape(1,-1) # shape (batch, 3)
+        else:
+            _ee_pos = s[...,:3].copy()
+            _bottom_block_pos = s[...,6:9].copy()
+            _top_block_pos = s[...,12:15].copy()
+
         # EE within table
-        outsideLeft_ee = np.any((state[...,0:3] <= self.env_bound_low), axis=-1)
-        outsideRight_ee = np.any((state[...,0:3] >= self.env_bound_high), axis=-1)
+        outsideLeft_ee = np.any((_ee_pos <= self.env_bound_low), axis=-1)
+        outsideRight_ee = np.any((_ee_pos >= self.env_bound_high), axis=-1)
         outside_ee = np.logical_or(outsideLeft_ee, outsideRight_ee)
 
         # Bottom bottom within table
-        outsideLeft_bottom = np.any((state[...,6:9] <= self.env_bound_low), axis=-1)
-        outsideRight_bottom = np.any((state[...,6:9] >= self.env_bound_high), axis=-1)
+        outsideLeft_bottom = np.any((_bottom_block_pos <= self.env_bound_low), axis=-1)
+        outsideRight_bottom = np.any((_bottom_block_pos >= self.env_bound_high), axis=-1)
         outside_bottom = np.logical_or(outsideLeft_bottom, outsideRight_bottom)
 
         # Bottom top within table
-        outsideLeft_top = np.any((state[...,12:15] <= self.env_bound_low), axis=-1)
-        outsideRight_top = np.any((state[...,12:15] >= self.env_bound_high), axis=-1)
+        outsideLeft_top = np.any((_top_block_pos <= self.env_bound_low), axis=-1)
+        outsideRight_top = np.any((_top_block_pos >= self.env_bound_high), axis=-1)
         outside_top = np.logical_or(outsideLeft_top, outsideRight_top)
 
         return np.logical_or(np.logical_or(outside_bottom, outside_top), outside_ee)
@@ -530,19 +553,13 @@ class SlidePickupClutterMujocoEnv(gym.Env, EzPickle):
             done = np.logical_or(fail, success)
         elif self.doneType == 'all':
             done = np.logical_or(np.logical_or(fail, success), self.check_within_env(state))
-            if fail:
-                print(f'=====Done: Fail=====')
-            if success:
-                print(f'=====Done: Success=====')
-            if self.check_within_env(state):
-                print(f'=====Done: Outside env=====')
+            if self.failure_mode is None and self.check_within_env(state):
+                self.failure_mode = 'out_of_env'
+            elif success:
+                self.failure_mode = 'success'
         else:
             raise ValueError("invalid done type!")
         return done
-
-    @property
-    def dt(self):
-        return self.model.opt.timestep * self.frame_skip
 
     def do_simulation(self, ctrl, n_frames=None):
         if self._did_see_sim_exception:
@@ -568,8 +585,7 @@ class SlidePickupClutterMujocoEnv(gym.Env, EzPickle):
         ee_vel_t = (self.ee_pos-self.ee_pos_tm1)/self.dt
         xt = np.append(self.ee_pos, ee_vel_t)
         for i, body_name in enumerate([self.env_cfg.block_bottom.block_name, self.env_cfg.block_top.block_name] + self.rel_obj_names):
-            body_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_BODY, f'{body_name}_main')
-            body_state = np.append(self.data.xpos[body_id], self.data.qvel[self.robot_dof+i*6: self.robot_dof+i*6+3])
+            body_state = np.append(self._get_body_pos(body_name), self.data.qvel[self.robot_dof+i*6: self.robot_dof+i*6+3])
             xt = np.append(xt, body_state)
         return xt
     
@@ -647,13 +663,14 @@ class SlidePickupClutterMujocoEnv(gym.Env, EzPickle):
         xt = self.get_current_state()
         self.ee_pos_tm1 = self.ee_pos.copy()
 
-        fail, g_x = self.check_failure(xt.reshape(1,-1))
-        success, l_x = self.check_success(xt.reshape(1,-1))
-        done = self.get_done(xt.reshape(1,-1), success, fail)[0]
-        # print(f't={self._current_timestep} {success=} {fail=} {done=}')
+        fail, g_x = self.check_failure()
+        success, l_x = self.check_success()
+
+        done = self.get_done(None, success, fail)[0]
         cost = self.get_cost(l_x, g_x, success, fail)[0]
         info = {"g_x": g_x[0], "l_x": l_x[0]}
-
+        info['failure_mode'] = self.failure_mode
+        
         self.set_xyz_action(action[:3])
         self.do_simulation([-1, 1]) # Gripper always closed
         self.check_suction_grasp()
@@ -680,6 +697,8 @@ class SlidePickupClutterMujocoEnv(gym.Env, EzPickle):
         action = np.zeros(3)
         if self.suction_gripper_active:
             action[:3] = [-0.4, 0, 0.1]
+            # target_pos = [0., 0.3, 0.1]
+            # action[:3] = target_pos - self.ee_pos
         else:
             target_pos = self.get_suction_target()
             action[:3] = target_pos - self.ee_pos
@@ -719,45 +738,54 @@ class SlidePickupClutterMujocoEnv(gym.Env, EzPickle):
         # print(f'{obstacle=}')
         return obstacle
 
-    def safety_margin(self, s, safety_set_top_low=None, safety_set_top_high=None):
+    def safety_margin(self, s=None, safety_set_top_low=None, safety_set_top_high=None):
         # Input:s top block position, shape (batch, 3)
         # g(x)>0 is obstacle
 
-        top_block_pos = s[...,12:15]
+        if s is None:
+            _ee_pos = self.ee_pos.reshape(1,-1)
+            _bottom_block_pos = self.bottom_block_pos.reshape(1,-1) # shape (batch, 3)
+            _top_block_pos = self.top_block_pos.reshape(1,-1) # shape (batch, 3)
+        else:
+            _ee_pos = s[...,:3].copy()
+            _bottom_block_pos = s[...,6:9].copy()
+            _top_block_pos = s[...,12:15].copy()
+            
         if safety_set_top_low is None:
-            safety_set_top_low = top_block_pos + self.env_cfg.block_top.safety_set.low
+            safety_set_top_low = _top_block_pos + self.env_cfg.block_top.safety_set.low
 
         if safety_set_top_high is None:
-            safety_set_top_high = top_block_pos + self.env_cfg.block_top.safety_set.high
-
-        # lower_boundary = np.max(safety_set_top_low - top_block_pos, axis=-1)
-        # upper_boundary = np.max(top_block_pos - safety_set_top_high, axis=-1)
-        # gx = np.maximum(lower_boundary, upper_boundary) # top block safety
+            safety_set_top_high = _top_block_pos + self.env_cfg.block_top.safety_set.high
 
         # top block safety: stay within safety bounds
         gx = signed_dist_fn_rectangle(
-            top_block_pos, 
+            _top_block_pos, 
             safety_set_top_low, 
             safety_set_top_high)
 
         if gx[0]>0:
-            print(f'======Done: Top block unsafe ======')
-            
+            self.failure_mode = 'top_block_oob'
+
         if not self.env_cfg.reset_grasped:
             # gripper should not hit top block
             obj_low, obj_high = self.get_object_bounds(self.env_cfg.block_top.block_name)
-            obstacle_high = s[...,12:15] + obj_high + self.env_cfg.thresh
-            obstacle_low = s[...,12:15] + obj_low - self.env_cfg.thresh
+            obstacle_high = _top_block_pos + obj_high + self.env_cfg.thresh
+            obstacle_low = _top_block_pos + obj_low - self.env_cfg.thresh
             obstacle = signed_dist_fn_rectangle(
-                s[...,:3], 
+                _ee_pos, 
                 obstacle_low, 
                 obstacle_high,
                 obstacle=True)
             gx = np.maximum(gx, obstacle)
 
         # obstacle avoidance between bottom block and distractors
-        for i, obj_name in enumerate(self.rel_obj_names):
-            obstacle = self.collision_distance(self.env_cfg.block_bottom.block_name, s[...,6:9], obj_name, s[...,18+i*6:18+i*6+3])
+        _obstacle_names = self.env_cfg.objects.names if s is None else self.rel_obj_names
+        for i, obj_name in enumerate(_obstacle_names):
+            _obj_pos = self._get_body_pos(obj_name) if s is None else s[...,18+i*6:18+i*6+3]
+            obstacle = self.collision_distance(self.env_cfg.block_bottom.block_name, _bottom_block_pos, obj_name, _obj_pos)
+            if obstacle[0]>0:
+                self.failure_mode = 'hit_obstacle'
+                self.colliding_obj_name = obj_name
             gx = np.maximum(gx, obstacle)
         
         gx = self.scaling_safety * gx
@@ -766,7 +794,7 @@ class SlidePickupClutterMujocoEnv(gym.Env, EzPickle):
             gx = -1.*gx
         return gx
 
-    def target_margin(self, s, target_set_low=None, target_set_high=None):
+    def target_margin(self, s=None, target_set_low=None, target_set_high=None):
         """Computes the margin (e.g. distance) between the state and the target set.
 
         Args:
@@ -777,26 +805,32 @@ class SlidePickupClutterMujocoEnv(gym.Env, EzPickle):
                 is not specified, return None.
         """
         # l(x)<0 is target
-        # bottom block reached goal region
-        # goal = np.concatenate([self.goal, np.zeros(3)])
 
-        bottom_block_pos = s[...,6:9]
+        if s is None:
+            _ee_pos = self.ee_pos.reshape(1,-1)
+            _bottom_block_pos = self.bottom_block_pos.reshape(1,-1) # shape (batch, 3)
+            _top_block_pos = self.top_block_pos.reshape(1,-1) # shape (batch, 3)
+        else:
+            _ee_pos = s[...,:3].copy()
+            _bottom_block_pos = s[...,6:9].copy()
+            _top_block_pos = s[...,12:15].copy()
+
         if target_set_low is None:
-            target_set_low = bottom_block_pos + self.env_cfg.block_bottom.target_set.low
+            target_set_low = _bottom_block_pos + self.env_cfg.block_bottom.target_set.low
 
         if target_set_high is None:
-            target_set_high = bottom_block_pos + self.env_cfg.block_bottom.target_set.high
+            target_set_high = _bottom_block_pos + self.env_cfg.block_bottom.target_set.high
 
         # block bottom goal
         lx = signed_dist_fn_rectangle(
-            bottom_block_pos, 
+            _bottom_block_pos, 
             target_set_low, 
             target_set_high)
 
+        # Goto suction target
         if not self.env_cfg.reset_grasped:
-            # Goto suction target
-            target_pos = self.get_suction_target()
-            suction_lx = np.linalg.norm(s[...,:3]-target_pos, axis=-1) - self.env_cfg.thresh
+            _target_pos = self.get_suction_target()
+            suction_lx = np.linalg.norm(_ee_pos-_target_pos, axis=-1) - self.env_cfg.thresh
             lx = np.maximum(suction_lx, lx)
 
         lx = self.scaling_target * lx
@@ -805,20 +839,34 @@ class SlidePickupClutterMujocoEnv(gym.Env, EzPickle):
 
         return lx
 
-    def check_failure(self, state):
+    def check_failure(self, state=None):
         g_x = self.safety_margin(state, self.safety_set_top_low, self.safety_set_top_high)
         if 'reward' in self.return_type: 
             return g_x<0, g_x
         else:
             return g_x>0, g_x # g(x)>0 is failure
   
-    def check_success(self, state):
+    def check_success(self, state=None):
         l_x = self.target_margin(state, self.target_set_low, self.target_set_high)
         if 'reward' in self.return_type: 
             return l_x>0, l_x
         else:
             return l_x<0, l_x # l(x)<0 is target
     
+    def get_rel_objects(self, mode):
+        if 'knn' in mode.lower():
+            dist = np.zeros(self.N_objs)
+            for i, body_name in enumerate(self.env_cfg.objects.names):
+                dist[i] = np.linalg.norm(self._get_body_pos(body_name) - self.bottom_block_pos)
+            sorted_indices = np.argsort(dist)[:self.env_cfg.n_rel_objs]
+            rel_objs = [self.env_cfg.objects.names[int(sorted_indices[j])] for j in range(len(sorted_indices))]
+        elif 'none' in mode.lower():
+            return [self.env_cfg.objects.names[i] for i in range(self.env_cfg.n_rel_objs)]
+        else:
+            raise NotImplementedError(f"Relevant object detector: {mode} not implemented.")
+        
+        return rel_objs
+
     def plot_trajectory(self, state, action, save_filename):
         # state shape = (T+1, self.n)
         # action shape = (T, self.m)
@@ -1015,45 +1063,19 @@ if __name__ == "__main__":
             at = env.action_space.sample()
             at_all.append(at)
             xt, _, done, _ = env.step(env.get_action())
-            # xt, _, done, _ = env.step(np.zeros(4))
-            
-
-            # body_id = mujoco.mj_name2id(env.model, mujoco.mjtObj.mjOBJ_BODY, 'gripper0_mocap')
-            # print(f"mocap pos: {env.data.xpos[body_id]}")
-            # body_id = mujoco.mj_name2id(env.model, mujoco.mjtObj.mjOBJ_BODY, f'gripper0_eef')
-            # print(f"eef pos: {env.data.xpos[body_id]}")
-            
-            # if ep_len>150:
-            #     print(env.all_geom_names)
-            #     g_geoms = [env.gripper.important_geoms["left_finger"], env.gripper.important_geoms["right_finger"]]
-            #     g_pad_geoms = [env.gripper.important_geoms["left_fingerpad"], env.gripper.important_geoms["right_fingerpad"]]
-            #     o_geoms = env.block_top.contact_geoms
-
-            #     # print(SU.check_contact(sim=env.sim, geoms_1='gripper0_finger1_collision', geoms_2='block_top_g0_vis'))
-                
-            #     for g_group in g_geoms:
-            #         # if not self.check_contact(g_group, o_geoms):
-            #         print(f'At t:{ep_len}, contact between {g_group} and {o_geoms}: {SU.check_contact(sim=env.sim, geoms_1=g_group, geoms_2=o_geoms)}')
-            #     print(SU.check_contact(sim=env.sim, geoms_1=env.gripper.contact_geoms, geoms_2=env.block_top.contact_geoms))
-
-            # print(get_contacts(env, env.block_top))
-            # print(check_contact(env, geoms_1=env.gripper.contact_geoms, geoms_2=env.block_top.contact_geoms))
-
 
             xt_all.append(xt)
 
             env.renderer.update_scene(env.data, camera=env.front_cam_name)
             img = env.renderer.render()
-            Image.fromarray(img).save(out_folder + f"rgb_slide_pickup_clutter_t_{ep_len}_{i}_front.png")
+            Image.fromarray(img).save(out_folder + f"cereal_t_{ep_len}_{i}_front.png")
             imgs.append(img)
 
             env.renderer.update_scene(env.data, camera=env.side_cam_name) 
             img = env.renderer.render()
-            # Image.fromarray(img).save(out_folder + f"rgb_slide_pickup_clutter_t_{ep_len}_{i}_side.png")
-            # Image.fromarray(depth.astype(np.uint8)).save(out_folder + f"clutter_depth_{i}_front.png")
             
             ep_len += 1
         print(f'ep_len: {ep_len}')
         if save_gif:
-            filename = out_folder + f'test_slide_pickup_clutter_box_{i}.gif'
+            filename = out_folder + f'test_slide_pickup_clutter_mocap_limits_{i}.gif'
             imageio.mimsave(filename, imgs[::4], duration=100)

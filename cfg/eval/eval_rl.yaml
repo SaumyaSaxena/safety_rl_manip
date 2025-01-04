@@ -7,8 +7,10 @@ eval_cfg:
   wandb_load:
     run_path: iam-lab/safety_rl_manip/f2x73e2f
     file: model/step_191999_test_return_-12.60_succRate_0.34.pth
+    # run_path: iam-lab/safety_rl_manip/o4qxn8mr
+    # file: model/step_159999_test_return_-2.09_succRate_0.73.pth
   eval_value_fn: False
   eval_safe_rollouts: True
   save_rollout_gifs: True
   num_visualization_rollouts: 20
-  num_eval_episodes: 1000
+  num_eval_episodes: 500

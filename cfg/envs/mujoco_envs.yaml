@@ -148,8 +148,8 @@ slide_pickup_clutter_mujoco_env-v0:
   init_wrist_qpos: [0.0]
   init_fingers_qpos: [0.020833, -0.020833]
   hand_init_pos: [0, 0.6, 0.3]
-  mocap_low: [-0.6, 0.3, 0.06]
-  mocap_high: [0.6, 0.9, 0.6]
+  mocap_low: [-0.5, 0.3, 0.06]
+  mocap_high: [0.5, 0.8, 0.6]
   mocap_quat: [0.707107, 0, 0, 0.707107] # [1, 0, 0, 0] ; [0.707107, 0, 0, 0.707107]
   gravity_compensation: True
   env_bounds:
@@ -158,7 +158,7 @@ slide_pickup_clutter_mujoco_env-v0:
   randomize_locations: True
   reset_grasped: False
   block_bottom:
-    block_name: 'purple_lego_set' # 'red_lunch_pack' # 'block_bottom', 'yellow_cereal_pack'
+    block_name: 'yellow_cereal_pack' # 'red_lunch_pack' # 'block_bottom', 'yellow_cereal_pack', purple_lego_set
     mass: 0.5
     initial_pos: [0.3, 0.6]
     size: [0.1, 0.1, 0.03] # half-dimensions
@@ -173,7 +173,7 @@ slide_pickup_clutter_mujoco_env-v0:
       high: [0.5, 0.75]
     N_x: [50, 50]
   block_top:
-    block_name: 'yellow_lego_set' # 'blue_lunch_pack' # 'block_top', 'white_cereal_pack'
+    block_name: 'orange_cereal_pack' # 'blue_lunch_pack' # 'block_top', 'white_cereal_pack', yellow_lego_set
     mass: 0.5
     initial_pos: [0.36, 0.6]
     size: [0.1, 0.1, 0.03] # half-dimensions
