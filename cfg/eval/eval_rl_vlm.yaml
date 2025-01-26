@@ -1,30 +1,56 @@
 tag: ${now:%Y-%m-%d-%H-%M-%S}
 debug: True # TODO: always true since we are not using wandb during eval
+# suffix: '1soft_1fragile_objects_k1_f4_frames2'
+# suffix: '6objs_k3_3fragile_3hard_GT'
+# suffix: '6objs_k3_all_fragile'
+suffix: '3objs_k2_all_frag_f4'
 
 eval_cfg:
   gpu: 0
-  seed: 5
+  seed: 10
   wandb_load:
-    # run_path: iam-lab/safety_rl_manip/f2x73e2f # lagrange
-    # file: model/step_191999_test_return_-12.60_succRate_0.34.pth
-    run_path: iam-lab/safety_rl_manip/o4qxn8mr # RA
-    file: model/step_383999_test_return_0.76_succRate_0.91.pth
+    # run_path: iam-lab/safety_rl_manip/414pxsqi # 3objs, RA
+    # file: model/step_1047999_test_return_-2.82_succRate_0.98.pth
+    # run_path: iam-lab/safety_rl_manip/9uds7ftw # 2objs, RA, hard target
+    # file: model/step_543999_test_return_-9.06_succRate_0.79.pth
+    run_path: iam-lab/safety_rl_manip/8ikq1ryb # 2objs, RA, hard target, slower
+    file: model/step_471999_test_return_-14.97_succRate_0.68.pth
+    feasibility_run_path: iam-lab/safety_rl_manip/foc3ac4e # 2obj, small blocks, RA
+    feasibility_file: model/step_343999_test_return_0.05_succRate_0.88.pth
+  check_feasibility: False
   eval_value_fn: False
   eval_safe_rollouts: True
   save_rollout_gifs: True
-  num_visualization_rollouts: 30
-  num_eval_episodes: 1000
-  relevant_obj_updater: 'knn' # 'vlm', 'none', 'knn'
+  num_visualization_rollouts: 2000
+  relevant_obj_updater: 'dynamic_knn' # 'vlm', 'none', 'dynamic_knn', 'static_knn', 'gt'
+  constraint_type_updater: 'conser' # 'conser', 'gt', 'vlm'
+  save_media: True
 
 vlm_cfg:
   vlm_type: 'gpt-4o-2024-08-06'
-  num_frames: 4
+  num_frames: 2
   subsample_freq: 4
+  rel_obj_update_freq: 4
 
 env_cfg:
+  img_size: [512, 512]
   randomize_locations: True
+  constraint_types: ['no_contact', 'soft_contact']
+  obj_to_constraint_map:
+    toy_squirrel: 'no_contact'
+    toy_sheep: 'no_contact'
+    blue_mug: 'no_contact'
+    porcelain_mug: 'no_contact'
+    red_mug: 'no_contact'
+    supplement0: 'no_contact'
+  n_rel_objs: 2
   objects:
-    names: ['porcelain_teapot', 'porcelain_mug']
+    names: ['toy_squirrel', 'toy_sheep', 'porcelain_mug'] #  'blue_mug', 'toy_sheep'
     initial_poses:
-      - [-0.1, 0.39]
       - [-0.5, 0.6]
+      - [-0.2, 0.85]
+      - [-0.4, 0.4]
+      - [0.5, 0.8]
+      - [0.0, 0.8]
+      - [0.2, 0.8]
+  doneType: 'all' # 'all', 'real'

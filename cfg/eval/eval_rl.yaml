@@ -2,15 +2,41 @@ tag: ${now:%Y-%m-%d-%H-%M-%S}
 debug: True # TODO: always true since we are not using wandb during eval
 
 eval_cfg:
-  gpu: 0
-  seed: 30
+  gpu: 1
+  seed: 3
   wandb_load:
-    run_path: iam-lab/safety_rl_manip/f2x73e2f
-    file: model/step_191999_test_return_-12.60_succRate_0.34.pth
-    # run_path: iam-lab/safety_rl_manip/o4qxn8mr
-    # file: model/step_159999_test_return_-2.09_succRate_0.73.pth
+    # run_path: iam-lab/safety_rl_manip/da3ndw93 # 1obj, Lagrange, hard target
+    # file: model/step_343999_test_return_-14.61_succRate_0.38.pth
+    # run_path: iam-lab/safety_rl_manip/jtb13ms1 # 1objs, RA, hard target
+    # file: model/step_295999_test_return_-9.34_succRate_1.00.pth
+    # run_path: iam-lab/safety_rl_manip/72hhcoxk # 2objs, Lagrange, hard target
+    # file: model/step_175999_test_return_-29.55_succRate_0.37.pth # updated
+    # run_path: iam-lab/safety_rl_manip/edru5vc7 # 2objs, RA, hard target, no crowd
+    # file: model/step_703999_test_return_-9.73_succRate_0.95.pth
+    # run_path: iam-lab/safety_rl_manip/czrxc6jq # 2objs, RA, hard target
+    # file: model/step_879999_test_return_-9.37_succRate_0.91.pth
+    # run_path: iam-lab/safety_rl_manip/tcf4qo46 # 3objs, Lagrange, hard target
+    # file: model/step_1047999_test_return_-15.71_succRate_0.31.pth
+    # run_path: iam-lab/safety_rl_manip/m2egn02k # 3objs, RA, hard target, no crowd
+    # file: model/step_2991999_test_return_-9.40_succRate_0.87.pth
+    # run_path: iam-lab/safety_rl_manip/egwcp2bc # 4objs, Lagrange, hard target
+    # file: model/step_1751999_test_return_-15.09_succRate_0.26.pth
+    # run_path: iam-lab/safety_rl_manip/vp107hmg # 4objs, RA, hard target
+    # file: model/step_2207999_test_return_-9.32_succRate_0.78.pth
+    # run_path: iam-lab/safety_rl_manip/2qh3cuf7 # 5objs, Lagrange, hard target
+    # file: model/step_727999_test_return_-23.15_succRate_0.32.pth
+    # run_path: iam-lab/safety_rl_manip/003xmffk # 5objs, RA, hard target
+    # file: model/step_1855999_test_return_-9.26_succRate_0.63.pth
+    # run_path: iam-lab/safety_rl_manip/tagf1f0y # 6objs, Lagrange, hard target
+    # file: model/step_1079999_test_return_-12.89_succRate_0.18.pth
+    # run_path: iam-lab/safety_rl_manip/31g0yc1v # 6objs, RA. hard target
+    # file: model/step_1015999_test_return_-8.40_succRate_0.45.pth
+    run_path: iam-lab/safety_rl_manip/07uibxf7 # 2objs, RA, constraint types
+    file: model/step_2623999_test_return_-10.55_succRate_0.91.pth
+    # run_path: iam-lab/safety_rl_manip/icr8cblt # 3objs, RA, constraint types
+    # file: model/step_2175999_test_return_-12.74_succRate_0.77.pth
   eval_value_fn: False
   eval_safe_rollouts: True
   save_rollout_gifs: True
-  num_visualization_rollouts: 20
-  num_eval_episodes: 500
+  num_visualization_rollouts: 10
+  num_eval_episodes: 2000

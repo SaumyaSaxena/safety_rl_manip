@@ -210,3 +210,97 @@ def add_text_to_img(img, text):
         cv2.putText(canvas, line, (10, y_offset), font, font_scale, text_color, font_thickness, lineType=cv2.LINE_AA)
         y_offset += text_height + line_spacing
     return canvas
+
+# Compute bounding boxes for all objects
+def get_bounding_boxes(segmentation):
+    unique_objects = np.unique(segmentation)
+    bboxes = {}
+
+    for obj_id in unique_objects:
+        if obj_id == 0:
+            continue  # Ignore background
+        ys, xs = np.where(segmentation == obj_id)
+        x_min, x_max = xs.min(), xs.max()
+        y_min, y_max = ys.min(), ys.max()
+        bboxes[obj_id] = (x_min, y_min, x_max, y_max)
+
+    return bboxes
+
+import seaborn as sns
+# Visualize bounding boxes on the image
+def draw_bounding_boxes_cv2(img, bboxes, names=None, color=None):
+    """
+    Draw bounding boxes and labels on an RGB image using OpenCV.
+    
+    Parameters:
+    - img: numpy array, RGB image (H, W, 3)
+    - bboxes: dict, {object_id: (x_min, y_min, x_max, y_max)}
+    - names: dict, {object_id: 'name'}
+    """
+    if color is None:
+        colors = sns.color_palette("dark", len(names))
+        colors_bgr = [tuple(int(c * 255) for c in reversed(color)) for color in colors] # Convert to BGR and scale for OpenCV
+
+    # Convert RGB image to BGR for OpenCV compatibility
+    img_bgr = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
+    
+    for obj_id, (x_min, y_min, x_max, y_max) in bboxes.items():
+        # Draw rectangle
+        
+        _c = colors_bgr[obj_id] if color is None else color
+        cv2.rectangle(img_bgr, (x_min, y_min), (x_max, y_max), _c, 1)
+        
+        # Put label with object ID
+        if names is not None:
+            label = f'{obj_id}: {names[obj_id]}'
+            cv2.putText(img_bgr, label, (x_min, y_min - 7), cv2.FONT_HERSHEY_SIMPLEX, 0.5, _c, 1, cv2.LINE_AA)
+    
+    # Convert back to RGB
+    img_rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
+    return img_rgb  # Return the modified image
+
+import matplotlib.pyplot as plt
+def plot_colored_segmentation(segmentation):
+    """
+    Plot a segmentation mask with different colors for each object ID.
+    
+    Parameters:
+    - segmentation: numpy array of shape (H, W) with object IDs
+    """
+    # Generate a colormap using Matplotlib's tab20
+    unique_ids = np.unique(segmentation)
+    num_ids = len(unique_ids)
+    
+    # Assign each ID a unique color
+    colormap = plt.cm.get_cmap('tab20', num_ids)  # Use a colormap with 20 unique colors
+    color_mapping = {unique_ids[i]: colormap(i)[:3] for i in range(num_ids)}  # RGB mapping
+
+    # Convert the segmentation mask into a color image
+    height, width = segmentation.shape
+    colored_segmentation = np.zeros((height, width, 3), dtype=np.uint8)
+
+    for obj_id, color in color_mapping.items():
+        mask = segmentation == obj_id
+        colored_segmentation[mask] = (np.array(color) * 255).astype(np.uint8)
+    
+    # Add object ID labels on the image using OpenCV
+    for obj_id in unique_ids:
+        if obj_id == 23 or obj_id ==24:
+            mask = (segmentation == obj_id)
+            ys, xs = np.where(mask)
+            if len(ys) > 0:
+                num_points_to_sample = min(10, len(ys))
+                sampled_indices = np.random.choice(len(ys), num_points_to_sample, replace=False)
+                sampled_points = list(zip(xs[sampled_indices], ys[sampled_indices]))
+
+                # Draw the object ID on the sampled points
+                for x, y in sampled_points:
+                    # Place label at the center of the object
+                    # center_x, center_y = int(xs.mean()), int(ys.mean())
+                    cv2.putText(
+                        colored_segmentation, f"{obj_id}", (x, y),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.3, (0, 0, 0), 1, cv2.LINE_AA
+                    )
+    # Convert to a PIL Image and save the result
+    img = Image.fromarray(colored_segmentation)
+    img.save("colored_segmentation.png")

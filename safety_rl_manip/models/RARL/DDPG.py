@@ -122,6 +122,7 @@ class DDPG(torch.nn.Module):
         self.start_steps = train_cfg.start_steps
         self.update_after = train_cfg.update_after
         self.update_every = train_cfg.update_every
+        self.update_steps = train_cfg.get('update_steps', 50)
         self.act_noise = train_cfg.act_noise
         self.noise_decay = train_cfg.get('noise_decay', 1.)
         self.max_ep_len = train_cfg.max_ep_len
@@ -487,7 +488,7 @@ class DDPG(torch.nn.Module):
     def rollout_episodes(self, num_episodes):
         FP, FN, TP, TN, num_pred_success, num_gt_success = 0, 0, 0, 0, 0, 0
         avg_return, avg_ep_len = 0. , 0.
-        failure_analysis = {k:0 for k in self.test_env.all_failure_modes}
+        failure_analysis = {k:0 for k in self.test_env.all_failure_modes+['timeout']}
         for i in trange(num_episodes, desc="Testing"):
             o, d, ep_ret = self.test_env.reset(), False, 0
 
@@ -507,6 +508,8 @@ class DDPG(torch.nn.Module):
             num_gt_success += gt_success
             if d:
                 failure_analysis[self.test_env.failure_mode] += 1
+            else:
+                failure_analysis['timeout'] += 1
 
             FP += np.sum(np.logical_and((gt_success == False), (pred_success == True)))
             FN += np.sum(np.logical_and((gt_success == True), (pred_success == False)))
@@ -593,7 +596,7 @@ class DDPG(torch.nn.Module):
 
             # Update handling
             if t >= self.update_after and t % self.update_every == 0:
-                for _ in range(self.update_every):
+                for _ in range(self.update_steps):
                     batch = self.replay_buffer.sample_batch(self.batch_size)
                     loss_q, loss_pi, loss_info = self.update(batch, epoch)
                     if not self.debug:
@@ -688,9 +691,11 @@ class DDPG(torch.nn.Module):
                 # Take deterministic actions at test time (noise_scale=0)
                 at = self.get_action(o, 0)
                 o, r, d, _ = self.test_env.step(at)
-                fail, _ = self.test_env.check_failure(o.reshape(1,self.test_env.n))
-                succ, _ = self.test_env.check_success(o.reshape(1,self.test_env.n))
-                gt_success = np.logical_or(np.logical_and(not fail[0], succ[0]), gt_success)
+                # fail, _ = self.test_env.check_failure(o.reshape(1,self.test_env.n))
+                # succ, _ = self.test_env.check_success(o.reshape(1,self.test_env.n))
+                # gt_success = np.logical_or(np.logical_and(not fail[0], succ[0]), gt_success)
+
+                gt_success = self.test_env.failure_mode=='success'
                 
                 at_all.append(at)
                 rollout.append(o)

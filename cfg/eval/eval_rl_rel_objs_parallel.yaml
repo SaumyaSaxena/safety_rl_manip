@@ -1,0 +1,69 @@
+tag: ${now:%Y-%m-%d-%H-%M-%S}
+debug: True # TODO: always true since we are not using wandb during eval
+# suffix: '1soft_1fragile_objects_k1_f4_frames2'
+# suffix: '6objs_k3_3fragile_3hard_GT'
+# suffix: '6objs_k5_all_fragile'
+# suffix: 'parallel_5objs_k2_constraint_types_2fragile_2any_1soft'
+suffix: 'parallel_5objs_k2_constraint_types_2fragile_1any_2soft'
+# suffix: 'parallel_5objs_k2_3fragile_2any'
+# suffix: 'test'
+
+eval_cfg:
+  gpu: 0
+  seed: 5
+  wandb_load:
+    # run_path: iam-lab/safety_rl_manip/9uds7ftw # 2objs, RA, hard target
+    # file: model/step_543999_test_return_-9.06_succRate_0.79.pth
+    # run_path: iam-lab/safety_rl_manip/nsu7nr5b # 2objs, RA, hard target, midspeed
+    # file: model/step_311999_test_return_-10.29_succRate_0.73.pth
+    # run_path: iam-lab/safety_rl_manip/edru5vc7 # 2objs, RA, hard target, no crowd test
+    # file: model/step_703999_test_return_-9.73_succRate_0.95.pth
+    # run_path: iam-lab/safety_rl_manip/czrxc6jq # 2objs, RA, hard target, highspeed
+    # file: model/step_879999_test_return_-9.37_succRate_0.91.pth
+    # run_path: iam-lab/safety_rl_manip/m2egn02k # 3objs, RA, hard target
+    # file: model/step_2967999_test_return_-9.70_succRate_0.88.pth
+    # run_path: iam-lab/safety_rl_manip/vp107hmg # 4objs, RA, hard target
+    # file: model/step_2207999_test_return_-9.32_succRate_0.78.pth
+    # run_path: iam-lab/safety_rl_manip/003xmffk # 5objs, RA, hard target
+    # file: model/step_1855999_test_return_-9.26_succRate_0.63.pth
+    run_path: iam-lab/safety_rl_manip/07uibxf7 # 2objs, RA, constraint types
+    file: model/step_2623999_test_return_-10.55_succRate_0.91.pth
+    feasibility_run_path: iam-lab/safety_rl_manip/foc3ac4e # 2obj, small blocks, RA
+    feasibility_file: model/step_343999_test_return_0.05_succRate_0.88.pth
+  check_feasibility: False
+  eval_value_fn: False
+  eval_safe_rollouts: True
+  num_visualization_rollouts: 2000
+  relevant_obj_updaters: ['static_knn', 'dynamic_knn'] # 'vlm', 'none', 'dynamic_knn', 'static_knn', 'gt'
+  constraint_type_updaters: ['conser', 'conser'] # 'conser', 'gt', 'vlm'
+  # relevant_obj_updaters: ['static_knn', 'dynamic_knn', 'vlm', 'dynamic_knn'] # 'vlm', 'none', 'dynamic_knn', 'static_knn', 'gt'
+  # constraint_type_updaters: ['conser', 'conser', 'vlm', 'vlm'] # 'conser', 'gt', 'vlm'
+  use_image_for_vlm_contraint_type: False
+  save_media: True
+
+vlm_cfg:
+  vlm_type: 'gpt-4o-2024-08-06'
+  num_frames: 2
+  subsample_freq: 4
+  rel_obj_update_freq: [4, 4]
+
+env_cfg:
+  img_size: [512, 512]
+  randomize_locations: True
+  constraint_types: ['no_contact', 'soft_contact']
+  obj_to_constraint_map:
+    toy_squirrel: 'any_contact'
+    toy_sheep: 'any_contact'
+    blue_mug: 'no_contact'
+    porcelain_mug: 'no_contact'
+    red_mug: 'no_contact'
+    supplement0: 'soft_contact'
+    supplement2: 'soft_contact'
+    toy_android: 'any_contact'
+  n_rel_objs: 2
+  objects:
+    names: ['blue_mug', 'porcelain_mug', 'supplement2', 'supplement0', 'toy_android'] #  'blue_mug', 'toy_sheep'
+    state_ranges: # x, y
+      low: [-0.55, 0.3]
+      high: [0.7, 0.9]
+  doneType: 'all' # 'all', 'real'

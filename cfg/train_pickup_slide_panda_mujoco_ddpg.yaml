@@ -5,7 +5,7 @@ tag: ${now:%Y-%m-%d-%H-%M-%S}
 run_name: "train_panda_DDPG_pickup_slide_mujoco_${train_cfg.mode}" 
 # variant: ${train_cfg.warmup_cfg.warmup_type}_UpdatePiType_${train_cfg.warmup_cfg.warmupQ_expert.update_pi_type}
 # variant: 'no_terminal_gammaSch150_lrSch'
-variant: 'reset_grasped'
+variant: '1obj'
 
 hydra:
   run:
@@ -55,10 +55,10 @@ train_cfg:
   add_expert_to_buffer: False
   expert_data_loc: '/home/saumyas/Projects/safe_control/HJR_manip/outputs/DoubleIntegrator/goto_goal_datasets/data_DoubleIntegrator_goto_goal_N_620.pkl'
   expert_data_frac: 0.75
-  mode: 'RA' # RA, lagrange
+  mode: 'lagrange' # RA, lagrange
   seed: ${seed}
-  steps_per_epoch: 4000
-  epochs: 400
+  steps_per_epoch: 4000 # 4000
+  epochs: 1200
   replay_size: 1e+6
   gamma: 0.99
   schedule_gamma: False
@@ -78,10 +78,11 @@ train_cfg:
     warmup_lr: 1.0e-4
     warmup_epochs: 10
     cooldown_epochs: 0
-  batch_size: 200
+  batch_size: 200 # 200
   start_steps: 10000
-  update_after: 1000
-  update_every: 50
+  update_after: 1000 # 1000
+  update_steps: 50 # 50
+  update_every: 50 # 50
   act_noise: 0.1
   schedule_noise: False
   noise_decay: 0.985
@@ -94,9 +95,8 @@ train_cfg:
     hidden_sizes: [256,256]
   resume_from_ckpt: False
   wandb_load:
-    run_path: iam-lab/safety_rl_manip/cxrjqc41 # iam-lab/safety_rl_manip/lxqxti1m
-    file: model/step_1591999_test_return_-2.19.pth # model/step_1207999_test_return_-2.37.pth
-
+    run_path: iam-lab/safety_rl_manip/7kqhxsr4 # 6objs, RA
+    file: model/step_1087999_test_return_-3.13_succRate_0.73.pth
 eval_cfg:
   seed: ${seed}
   eval_value_fn: False
