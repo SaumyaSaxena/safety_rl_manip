@@ -66,3 +66,28 @@ class MLPActorCritic(nn.Module):
     def act(self, obs):
         with torch.no_grad():
             return self.pi(obs).cpu().numpy()
+        
+class ActorCritic(nn.Module):
+
+    def __init__(
+            self, 
+            observation_space, 
+            action_space,
+            device,
+            hidden_sizes=(256,256),
+            activation=nn.ReLU,
+        ):
+        super().__init__()
+
+        obs_dim = observation_space.shape[0]
+        act_dim = action_space.shape[0]
+        act_min = torch.from_numpy(action_space.low).to(device)
+        act_max = torch.from_numpy(action_space.high).to(device)
+
+        # build policy and value functions
+        self.pi = MLPActor(obs_dim, act_dim, hidden_sizes, activation, act_min, act_max)
+        self.q = MLPQFunction(obs_dim, act_dim, hidden_sizes, activation)
+
+    def act(self, obs):
+        with torch.no_grad():
+            return self.pi(obs).cpu().numpy()

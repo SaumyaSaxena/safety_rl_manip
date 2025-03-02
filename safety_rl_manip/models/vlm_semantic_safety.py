@@ -26,14 +26,6 @@ def create_planner_response(object_list, num_objects: int):
 
     RelevantObjects = create_model("RelevantObjects", **fields)
 
-    # class RelevantObjects(BaseModel):
-    #     explanation_obj1: str
-    #     object1: object_list
-    #     explanation_obj2: str
-    #     object2: object_list
-    #     explanation_obj3: str
-    #     object3: object_list
-
     class PlannerResponse(BaseModel):
         relevant_objects: RelevantObjects
         image_description: str

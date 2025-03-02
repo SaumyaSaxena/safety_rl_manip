@@ -5,8 +5,8 @@ eval_cfg:
   gpu: 1
   seed: 3
   wandb_load:
-    # run_path: iam-lab/safety_rl_manip/da3ndw93 # 1obj, Lagrange, hard target
-    # file: model/step_343999_test_return_-14.61_succRate_0.38.pth
+    run_path: iam-lab/safety_rl_manip/gncqv0nb # 1obj, Lagrange, hard target
+    file: model/step_103999_test_return_-14.21_succRate_0.48.pth
     # run_path: iam-lab/safety_rl_manip/jtb13ms1 # 1objs, RA, hard target
     # file: model/step_295999_test_return_-9.34_succRate_1.00.pth
     # run_path: iam-lab/safety_rl_manip/72hhcoxk # 2objs, Lagrange, hard target
@@ -31,8 +31,8 @@ eval_cfg:
     # file: model/step_1079999_test_return_-12.89_succRate_0.18.pth
     # run_path: iam-lab/safety_rl_manip/31g0yc1v # 6objs, RA. hard target
     # file: model/step_1015999_test_return_-8.40_succRate_0.45.pth
-    run_path: iam-lab/safety_rl_manip/07uibxf7 # 2objs, RA, constraint types
-    file: model/step_2623999_test_return_-10.55_succRate_0.91.pth
+    # run_path: iam-lab/safety_rl_manip/07uibxf7 # 2objs, RA, constraint types
+    # file: model/step_2623999_test_return_-10.55_succRate_0.91.pth
     # run_path: iam-lab/safety_rl_manip/icr8cblt # 3objs, RA, constraint types
     # file: model/step_2175999_test_return_-12.74_succRate_0.77.pth
   eval_value_fn: False

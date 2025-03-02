@@ -3,8 +3,8 @@ debug: True # TODO: always true since we are not using wandb during eval
 # suffix: '1soft_1fragile_objects_k1_f4_frames2'
 # suffix: '6objs_k3_3fragile_3hard_GT'
 # suffix: '6objs_k5_all_fragile'
-# suffix: 'parallel_5objs_k2_constraint_types_2fragile_2any_1soft'
 suffix: 'parallel_5objs_k2_constraint_types_2fragile_1any_2soft'
+# suffix: 'parallel_6objs_k3_constraint_types_2fragile_2any_2soft'
 # suffix: 'parallel_5objs_k2_3fragile_2any'
 # suffix: 'test'
 
@@ -28,16 +28,18 @@ eval_cfg:
     # file: model/step_1855999_test_return_-9.26_succRate_0.63.pth
     run_path: iam-lab/safety_rl_manip/07uibxf7 # 2objs, RA, constraint types
     file: model/step_2623999_test_return_-10.55_succRate_0.91.pth
+    # run_path: iam-lab/safety_rl_manip/icr8cblt # 3objs, RA, constraint types
+    # file: model/step_2175999_test_return_-12.74_succRate_0.77.pth
     feasibility_run_path: iam-lab/safety_rl_manip/foc3ac4e # 2obj, small blocks, RA
     feasibility_file: model/step_343999_test_return_0.05_succRate_0.88.pth
   check_feasibility: False
   eval_value_fn: False
   eval_safe_rollouts: True
   num_visualization_rollouts: 2000
-  relevant_obj_updaters: ['static_knn', 'dynamic_knn'] # 'vlm', 'none', 'dynamic_knn', 'static_knn', 'gt'
-  constraint_type_updaters: ['conser', 'conser'] # 'conser', 'gt', 'vlm'
-  # relevant_obj_updaters: ['static_knn', 'dynamic_knn', 'vlm', 'dynamic_knn'] # 'vlm', 'none', 'dynamic_knn', 'static_knn', 'gt'
-  # constraint_type_updaters: ['conser', 'conser', 'vlm', 'vlm'] # 'conser', 'gt', 'vlm'
+  # relevant_obj_updaters: ['static_knn', 'dynamic_knn'] # 'vlm', 'none', 'dynamic_knn', 'static_knn', 'gt'
+  # constraint_type_updaters: ['conser', 'conser'] # 'conser', 'gt', 'vlm'
+  relevant_obj_updaters: ['static_knn', 'dynamic_knn', 'vlm', 'dynamic_knn'] # 'vlm', 'none', 'dynamic_knn', 'static_knn', 'gt'
+  constraint_type_updaters: ['conser', 'conser', 'vlm', 'vlm'] # 'conser', 'gt', 'vlm'
   use_image_for_vlm_contraint_type: False
   save_media: True
 
@@ -45,7 +47,7 @@ vlm_cfg:
   vlm_type: 'gpt-4o-2024-08-06'
   num_frames: 2
   subsample_freq: 4
-  rel_obj_update_freq: [4, 4]
+  rel_obj_update_freq: [4, 4, 4, 4]
 
 env_cfg:
   img_size: [512, 512]
@@ -60,9 +62,10 @@ env_cfg:
     supplement0: 'soft_contact'
     supplement2: 'soft_contact'
     toy_android: 'any_contact'
+    plant_pot: 'soft_contact'
   n_rel_objs: 2
   objects:
-    names: ['blue_mug', 'porcelain_mug', 'supplement2', 'supplement0', 'toy_android'] #  'blue_mug', 'toy_sheep'
+    names: ['blue_mug', 'porcelain_mug', 'plant_pot', 'supplement0', 'toy_android'] #  'blue_mug', 'toy_sheep'
     state_ranges: # x, y
       low: [-0.55, 0.3]
       high: [0.7, 0.9]

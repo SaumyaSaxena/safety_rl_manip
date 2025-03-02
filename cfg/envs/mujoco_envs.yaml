@@ -147,16 +147,18 @@ slide_pickup_clutter_mujoco_env-v0:
     supplement0: 'no_contact'
     supplement2: 'no_contact'
     toy_android: 'no_contact'
+    plant_pot: 'no_contact'
+    porcelain_teapot: 'no_contact'
   vel_thresh: 1.0
   thresh: 0.01
   toppl_thresh: 15
   frame_skip: 5
-  img_size: [512, 512]
+  img_size: [1024, 1024]
   goal: [0.6, 0.6, 0.5]
   control_low: [-1.,-1.,-1.]
   control_high: [1.,1.,1.]
   num_eval_trajs: 20
-  n_rel_objs: 1
+  n_rel_objs: 3
   action_scale: [0.02, 0.02, 0.02] # [0.02, 0.02, 0.02]
   robot_base_pos: [0, 0.0,0.0]
   init_arm_qpos: [1.5,0,0,-1.5,0.0,1.5,0.0] #[1.52613082e+00,  1.86419679e-01,  4.72079341e-02, -1.91944351e+00, -1.01665263e-02,  2.10563729e+00,  2.89773222e+00] # [1.5,0,0,-1.5,0.0,1.5,0.0]
@@ -207,7 +209,7 @@ slide_pickup_clutter_mujoco_env-v0:
       low: [0.03, -0.00] # relative to block_bottom
       high: [0.04, 0.00] # relative to block_bottom
   objects:
-    names: ['porcelain_mug'] # 'toy_squirrel', 'toy_sheep', 'porcelain_mug', 'blue_mug', 'red_mug', 'supplement0'
+    names: ['porcelain_mug', 'red_mug', 'toy_squirrel', 'blue_mug', 'toy_sheep', 'supplement0', 'toy_android', 'plant_pot'] # 'toy_squirrel', 'toy_sheep', 'porcelain_mug', 'blue_mug', 'red_mug', 'supplement0'
     state_ranges: # x, y
       low: [-0.55, 0.3]
       high: [0.7, 0.9]
@@ -217,6 +219,9 @@ slide_pickup_clutter_mujoco_env-v0:
       - [-0.4, 0.4]
       - [0.5, 0.8]
       - [0.0, 0.8]
+      - [0.2, 0.8]
+      - [0.2, 0.8]
+      - [0.2, 0.8]
       - [0.2, 0.8]
     N_x: [50, 50]
   penalty: 10.

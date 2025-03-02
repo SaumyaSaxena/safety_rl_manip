@@ -6,7 +6,7 @@ from torch.optim import AdamW
 import gym
 import time
 import json
-from .DDPG_core import MLPActorCritic
+from .DDPG_core import ActorCritic
 import wandb
 from tqdm import trange
 from .utils import calc_false_pos_neg_rate, TopKLogger, ReplayBuffer, set_seed
@@ -153,7 +153,7 @@ class DDPG(torch.nn.Module):
         self.act_dim = self.env.action_space.shape[0]
 
         # Create actor-critic module and target networks
-        self.ac = MLPActorCritic(
+        self.ac = ActorCritic(
             self.env.observation_space, 
             self.env.action_space,
             device,
