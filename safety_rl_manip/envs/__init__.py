@@ -20,3 +20,4 @@ from .slide_pickup_noRobot_mujoco import SlidePickupMujocoEnv
 from .slide_pickup_obstacles_noRobot_mujoco import SlidePickupObstaclesMujocoEnv
 from .point_mass_2D_obstacles_env import PointMass2DObstacles
 from .slide_pickup_clutter_mujoco import SlidePickupClutterMujocoEnv
+from .slide_pickup_clutter_mujoco_multimodal import SlidePickupClutterMujocoMultimodalEnv

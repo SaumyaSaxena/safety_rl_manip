@@ -9,6 +9,7 @@ from omegaconf import OmegaConf
 
 from safety_rl_manip.models.RARL.DDPG import DDPG
 from safety_rl_manip.models.RARL.DDPG_switching import DDPGSwitching
+from safety_rl_manip.models.RARL.DDPG_multimodal import DDPGMultimodal
 from safety_rl_manip.models.RARL.SAC import SAC
 
 logger = logging.getLogger(__name__)

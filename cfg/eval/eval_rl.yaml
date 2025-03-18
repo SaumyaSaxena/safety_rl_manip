@@ -5,8 +5,8 @@ eval_cfg:
   gpu: 1
   seed: 3
   wandb_load:
-    run_path: iam-lab/safety_rl_manip/gncqv0nb # 1obj, Lagrange, hard target
-    file: model/step_103999_test_return_-14.21_succRate_0.48.pth
+    # run_path: iam-lab/safety_rl_manip/gncqv0nb # 1obj, Lagrange, hard target
+    # file: model/step_103999_test_return_-14.21_succRate_0.48.pth
     # run_path: iam-lab/safety_rl_manip/jtb13ms1 # 1objs, RA, hard target
     # file: model/step_295999_test_return_-9.34_succRate_1.00.pth
     # run_path: iam-lab/safety_rl_manip/72hhcoxk # 2objs, Lagrange, hard target
@@ -35,8 +35,10 @@ eval_cfg:
     # file: model/step_2623999_test_return_-10.55_succRate_0.91.pth
     # run_path: iam-lab/safety_rl_manip/icr8cblt # 3objs, RA, constraint types
     # file: model/step_2175999_test_return_-12.74_succRate_0.77.pth
+    run_path: iam-lab/safety_rl_manip/6wgcopz1
+    file: model/step_2119999_test_return_-8.03_succRate_0.29.pth
   eval_value_fn: False
   eval_safe_rollouts: True
   save_rollout_gifs: True
-  num_visualization_rollouts: 10
-  num_eval_episodes: 2000
+  num_visualization_rollouts: 50
+  num_eval_episodes: 2

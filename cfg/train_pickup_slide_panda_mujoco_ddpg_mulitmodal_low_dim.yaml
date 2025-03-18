@@ -1,11 +1,11 @@
 debug: False
-gpu: 0
+gpu: 1
 seed: 0
 tag: ${now:%Y-%m-%d-%H-%M-%S}
 run_name: "train_panda_DDPG_pickup_slide_mujoco_${train_cfg.mode}" 
 # variant: ${train_cfg.warmup_cfg.warmup_type}_UpdatePiType_${train_cfg.warmup_cfg.warmupQ_expert.update_pi_type}
 # variant: 'no_terminal_gammaSch150_lrSch'
-variant: '3obj_transformer_rgb'
+variant: '3obj_transformer_lowdim_robosuiteAttn_mask_3attn128_gradclip_xavier_noPosEnc_lr1e5'
 
 hydra:
   run:
@@ -32,9 +32,9 @@ envs:
     mode: ${train_cfg.mode}
     costType: 'max_ell_g'
     epochs: ${train_cfg.epochs}
-observations:
-    low_dim: ['robot_state', 'objects_state']
-    rgb: ['rgb_front_cam'] # ['rgb_front_cam','rgb_eye_in_hand_cam']
+    observations:
+      low_dim: ['robot_state', 'objects_state']
+      rgb: [] # ['rgb_front_cam','rgb_eye_in_hand_cam']
 
 train_cfg:
   run_variant: ${variant}
@@ -60,7 +60,7 @@ train_cfg:
   expert_data_frac: 0.75
   mode: 'RA' # RA, lagrange
   seed: ${seed}
-  steps_per_epoch: 2000 # 4000
+  steps_per_epoch: 4000 # 4000
   epochs: 1200
   replay_size: 1e+6
   gamma: 0.99
@@ -69,7 +69,8 @@ train_cfg:
   scale_q_loss: 1000.0
   polyak: 0.995
   optimizer:
-    lr: 1e-3
+    lr: 1e-5
+    clip_grad_norm: 1.0
     AdamW:
       eps: 1.0e-8
       weight_decay: 0.01
@@ -82,7 +83,7 @@ train_cfg:
       warmup_epochs: 10
       cooldown_epochs: 0
   batch_size: 200 # 200
-  start_steps: 1000 # 10000
+  start_steps: 10000 # 10000
   update_after: 1000 # 1000
   update_steps: 50 # 50
   update_every: 50 # 50
@@ -104,7 +105,7 @@ train_cfg:
               name: SmallStem16
               kwargs:
                 trainable: False
-            obs_stack_keys: ['rgb_front_cam']
+            obs_stack_keys: []
             num_tokens: 256
           name: ImageTokenizer
         image_secondary:
@@ -133,6 +134,7 @@ train_cfg:
           kwargs:
             pred_horizon: ${train_cfg.ac_kwargs.TransformerActorCritic.pred_horizon}
             readout_key: readout_action # is always "readout_{head_name}" where here head_name = action
+            hidden_sizes: [128,128]
             use_map: false
             embedding_size: ${train_cfg.ac_kwargs.TransformerActorCritic.token_embedding_size}
             loss_type: 'mse' # 'l1', 'softmax_cross_ent', 'mse'
@@ -141,21 +143,21 @@ train_cfg:
           args: []
           kwargs:
             pred_horizon: ${train_cfg.ac_kwargs.TransformerActorCritic.pred_horizon}
-            embedding_size: ${train_cfg.ac_kwargs.TransformerActorCritic.token_embedding_size}
             readout_key: readout_value # is always "readout_{head_name}" where here head_name = value
+            hidden_sizes: [128,128]
             use_map: false
             loss_type: 'mse' # 'l1', 'softmax_cross_ent', 'mse'
           name: ValueHead
       max_tokens: 16 # language tokens
-      token_embedding_size: 384
+      token_embedding_size: 128
       pred_horizon: 1
       transformer_kwargs:
-        add_position_embedding: false
+        add_position_embedding: False
         attention_dropout_rate: 0.1
         dropout_rate: 0.1
-        mlp_dim: 512 # 1536
-        num_attention_heads: 3 #6
-        num_layers: 3 #12
+        mlp_dim: 256 # around 4 times the token_embedding_size
+        num_attention_heads: 4 #6
+        num_layers: 4 #12
         window_size: 1
         token_embedding_size: ${train_cfg.ac_kwargs.TransformerActorCritic.token_embedding_size}
     MLPActorCritic:

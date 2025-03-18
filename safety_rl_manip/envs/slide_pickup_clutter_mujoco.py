@@ -686,6 +686,10 @@ class SlidePickupClutterMujocoEnv(gym.Env, EzPickle):
                 self._did_see_sim_exception = True
 
     def get_current_relevant_state(self):
+        """ 
+            Appends together EE_pos and EE_vel, bottom block pos and vel, top block pos and vel, 
+            object pos and vel and constraint type for relevant objects
+        """
         ee_vel_t = (self.ee_pos-self.ee_pos_tm1)/self.dt
         xt = np.append(self.ee_pos, ee_vel_t)
         for i, body_name in enumerate([self.env_cfg.block_bottom.block_name, self.env_cfg.block_top.block_name]):
