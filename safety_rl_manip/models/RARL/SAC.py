@@ -176,7 +176,7 @@ class SAC(torch.nn.Module):
             eps=self.train_cfg.AdamW.eps,
             weight_decay=self.train_cfg.AdamW.weight_decay)
         self.pi_scheduler, _ = create_scheduler(self.train_cfg.scheduler, self.pi_optimizer)
-        self.q_optimizer = AdamW(self.ac.q.parameters(), lr=self.q_lr,
+        self.q_optimizer = AdamW(itertools.chain(self.ac.q1.parameters(), self.ac.q2.parameters()), lr=self.q_lr,
             eps=self.train_cfg.AdamW.eps,
             weight_decay=self.train_cfg.AdamW.weight_decay)
         self.q_scheduler, _ = create_scheduler(self.train_cfg.scheduler, self.q_optimizer)

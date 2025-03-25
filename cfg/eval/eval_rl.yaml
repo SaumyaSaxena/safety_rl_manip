@@ -35,8 +35,8 @@ eval_cfg:
     # file: model/step_2623999_test_return_-10.55_succRate_0.91.pth
     # run_path: iam-lab/safety_rl_manip/icr8cblt # 3objs, RA, constraint types
     # file: model/step_2175999_test_return_-12.74_succRate_0.77.pth
-    run_path: iam-lab/safety_rl_manip/6wgcopz1
-    file: model/step_2119999_test_return_-8.03_succRate_0.29.pth
+    run_path: iam-lab/safety_rl_manip/tdeaz8du
+    file: model/step_47999_test_return_-7.16_succRate_0.24.pth
   eval_value_fn: False
   eval_safe_rollouts: True
   save_rollout_gifs: True

@@ -376,10 +376,10 @@ class IdentityLowdimObsTokenizer(nn.Module):
     def forward(self, observations, tasks=None):
         assert self.obs_stack_keys, "Need to specify observation keys to tokenize."
         if len(regex_filter(self.obs_stack_keys, sorted(observations.keys()))) == 0:
-            logging.warning(
-                f"No observation inputs matching {self.obs_stack_keys} were found."
-                "Skipping tokenizer entirely."
-            )
+            # logging.warning(
+            #     f"No observation inputs matching {self.obs_stack_keys} were found."
+            #     "Skipping tokenizer entirely."
+            # )
             assert self.proper_pad_mask, "Cannot skip unless using proper pad mask."
             return None
 

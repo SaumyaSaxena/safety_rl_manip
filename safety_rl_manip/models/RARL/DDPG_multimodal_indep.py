@@ -6,16 +6,17 @@ from torch.optim import AdamW
 import gym
 import time
 import json
-from .DDPG_core import MLPActorCritic
+from .DDPG_core import TransformerIndepActorCritic, TransformerIndepAdaLNActorCritic, TransformerIndepActorCriticSS
 import wandb
 from tqdm import trange
-from .utils import calc_false_pos_neg_rate, TopKLogger, ReplayBuffer, set_seed
+from .utils import calc_false_pos_neg_rate, TopKLogger, ReplayBufferMultimodal, set_seed
 from timm.scheduler.scheduler_factory import create_scheduler
 from .datasets import *
 import imageio
 from safety_rl_manip.models.RARL.utils import print_parameters
 
-class DDPG(torch.nn.Module):
+
+class DDPGMultimodalIndep(torch.nn.Module):
     """
     Deep Deterministic Policy Gradient (DDPG)
 
@@ -117,8 +118,6 @@ class DDPG(torch.nn.Module):
         self.replay_size = int(train_cfg.replay_size)
         self.gamma = train_cfg.gamma
         self.polyak = train_cfg.polyak
-        self.pi_lr = train_cfg.pi_lr
-        self.q_lr = train_cfg.q_lr
         self.batch_size = train_cfg.batch_size
         self.start_steps = train_cfg.start_steps
         self.update_after = train_cfg.update_after
@@ -150,36 +149,42 @@ class DDPG(torch.nn.Module):
         if self.eval_cfg.eval_value_fn:
             self.env.plot_env(save_dir=self.figureFolder)
 
-        self.obs_dim = self.env.observation_space.shape
         self.act_dim = self.env.action_space.shape[0]
 
+        # Experience buffer
+        self.replay_buffer = ReplayBufferMultimodal(env_observation_shapes=self.env.env_observation_shapes, act_dim=self.act_dim, size=self.replay_size, device=device)
+
+
         # Create actor-critic module and target networks
-        self.ac = MLPActorCritic(
-            self.env.observation_space, 
+        self.ac = eval(train_cfg.ac_type)(
+            self.env.env_observation_shapes, 
             self.env.action_space,
             device,
-            **train_cfg.ac_kwargs
+            ac_kwargs=train_cfg.ac_kwargs[f'{train_cfg.ac_type}'],
         ).to(self.device)
+
         print_parameters(self.ac)
 
-        self.ac_targ = deepcopy(self.ac).to(self.device)
+        # self.ac_targ = deepcopy(self.ac).to(self.device)
+        self.ac_targ = eval(train_cfg.ac_type)(
+            self.env.env_observation_shapes, 
+            self.env.action_space,
+            device,
+            ac_kwargs=train_cfg.ac_kwargs[f'{train_cfg.ac_type}'],
+        ).to(self.device)
+        self.ac_targ.load_state_dict(self.ac.state_dict())
+        # Check if the parameters are the same
+        for param_ac, param_ac_targ in zip(self.ac.parameters(), self.ac_targ.parameters()):
+            assert torch.equal(param_ac, param_ac_targ)
 
         # Freeze target networks with respect to optimizers (only update via polyak averaging)
         for p in self.ac_targ.parameters():
             p.requires_grad = False
-
-        # Experience buffer
-        self.replay_buffer = ReplayBuffer(obs_dim=self.obs_dim, act_dim=self.act_dim, size=self.replay_size, device=device)
+        
+        print_parameters(self.ac_targ)
 
         # Set up optimizers and schedulers for policy and q-function
-        self.pi_optimizer = AdamW(self.ac.pi.parameters(), lr=self.pi_lr, 
-            eps=self.train_cfg.AdamW.eps,
-            weight_decay=self.train_cfg.AdamW.weight_decay)
-        self.pi_scheduler, _ = create_scheduler(self.train_cfg.scheduler, self.pi_optimizer)
-        self.q_optimizer = AdamW(self.ac.q.parameters(), lr=self.q_lr,
-            eps=self.train_cfg.AdamW.eps,
-            weight_decay=self.train_cfg.AdamW.weight_decay)
-        self.q_scheduler, _ = create_scheduler(self.train_cfg.scheduler, self.q_optimizer)
+        self.ac.create_optimizers(self.train_cfg.optimizer)
 
         self.MSELoss = torch.nn.MSELoss()
 
@@ -188,235 +193,30 @@ class DDPG(torch.nn.Module):
 
         self.topk_logger = TopKLogger(train_cfg.save_top_k)
 
-    def create_dataloader(self):
-        if self.warmup_cfg.warmup_type == 'warmupQ_terminal_all_states':
-            dataset =  AnalyticalTerminalDataset(
-                self.test_env, self.warmup_cfg.warmupQ_terminal_all_states.num_terminal_samples)
-        elif self.warmup_cfg.warmup_type == 'warmup_pi':
-            dataset =  AnalyticalExpertDataset(
-                self.test_env, filename=self.warmup_cfg.warmup_pi.expert_data_loc)
-        elif self.warmup_cfg.warmup_type == 'warmupQ_expert':
-            dataset =  AnalyticalMixedDataset(
-                self.test_env, 
-                filename=self.warmup_cfg.warmupQ_expert.expert_data_loc, 
-                num_terminal_samples=self.warmup_cfg.warmupQ_expert.num_mixed_terminal_samples)
-        else:
-            raise NotImplementedError('Dataset type not implemented.')
-
-        self.dataloader = torch.utils.data.DataLoader(
-            dataset,
-            batch_size=self.warmup_cfg.batch_size,
-            shuffle=True,
-            pin_memory=True,
-            drop_last=True,
-            num_workers=8,
-        )
-    
-    def warmupQ_terminal_update(self, batch):
-        for p in self.ac.pi.parameters():
-            p.requires_grad = False
-        Vx = self.ac.q(batch['xt'], batch['ut'])
-        loss = self.MSELoss(Vx, torch.min(batch['lx'], batch['gx']).flatten())
-
-        loss.backward()
-        self.warmup_q_optimizer.step()
-        for p in self.ac.pi.parameters():
-            p.requires_grad = True
-        loss_info = {'warmupQ_terminal_q_loss': loss.item()}
-        return loss_info
-
-    def warmupQ_expert_update(self, batch):
-        for p in self.ac.pi.parameters():
-            p.requires_grad = False
-        
-        q = self.ac.q(batch['xt'], batch['ut'])
-        q_pi_targ = self.ac_targ.q(batch['xtp1'], batch['utp1'])
-        
-        r , done, lx, gx = batch['rt'].flatten(), batch['done'].flatten(), batch['lx'].flatten(), batch['gx'].flatten()
-        # WarmupQ
-        if self.mode == 'lagrange':
-            backup = r + self.gamma * (1 - done) * q_pi_targ
-        elif self.mode == 'RA':
-            r = torch.min(lx, gx)
-            V_non_terminal = torch.min(
-                gx,
-                torch.max(lx, q_pi_targ),
-            )
-            
-            terminal = done * r
-            non_terminal = (1 - done) * (r*(1 - self.gamma) + V_non_terminal * self.gamma)
-            backup = terminal + non_terminal
-        else:
-            raise NotImplementedError("Mode not implemented.")
-        
-        # loss = ((q - backup)**2).mean()
-        loss = self.MSELoss(q, backup)
-        loss.backward()
-        self.warmup_q_optimizer.step()
-        loss_info = {'warmupQ_expert_q_loss': loss.item()}
-        
-        # Warmup pi
-        if self.warmup_cfg.warmupQ_expert.update_pi:
-            # Freeze q, unfreeze pi
-            for p in self.ac.pi.parameters():
-                p.requires_grad = True
-            for p in self.ac.q.parameters():
-                p.requires_grad = False
-
-            loss_pi = self.warmup_pi_loss(batch, update_type=self.warmup_cfg.warmupQ_expert.update_pi_type)
-            loss_pi.backward()
-            self.warmup_pi_optimizer.step()
-            loss_info.update({f'warmupQ_expert_pi_loss': loss_pi.item()})
-
-            for p in self.ac.q.parameters():
-                p.requires_grad = True
-        
-        return loss_info
-
-    def warmup_pi_loss(self, batch, update_type='expert'):
-        if update_type == 'expert':
-            # loss = torch.norm(batch['ut'], self.ac.pi(batch['xt']))
-            loss = self.MSELoss(self.ac.pi(batch['xt']), batch['ut'])
-        elif update_type == 'maxQ':
-            q_pi = self.ac.q(batch['xt'], self.ac.pi(batch['xt']))
-            loss = -q_pi.mean()
-        else:
-            raise NotImplementedError('Pi update type not implemented.')
-        return loss
-
-    def warmup_pi_update(self, batch):
-        for p in self.ac.pi.parameters():
-            p.requires_grad = True
-        for p in self.ac.q.parameters():
-            p.requires_grad = False
-
-        loss_pi = self.warmup_pi_loss(batch, update_type='expert')
-        loss_pi.backward()
-        self.warmup_pi_optimizer.step()
-        loss_info = {f'warmup_pi_loss': loss_pi.item()}
-
-        for p in self.ac.q.parameters():
-            p.requires_grad = True
-
-        return loss_info
-        
-    def warmup_update(self, epoch, step, batch):
-        self.warmup_q_optimizer.zero_grad()
-        self.warmup_pi_optimizer.zero_grad()
-
-        if self.warmup_cfg.warmup_type == 'warmupQ_terminal_all_states':
-            loss_info = self.warmupQ_terminal_update(batch)
-            
-        elif self.warmup_cfg.warmup_type == 'warmupQ_expert':
-            loss_info = self.warmupQ_expert_update(batch)
-
-        elif self.warmup_cfg.warmup_type == 'warmup_pi':
-            loss_info = self.warmup_pi_update(batch)
-        else:
-            raise NotImplementedError('Dataset type not implemented.')
-
-        # Finally, update target networks by polyak averaging.
-        with torch.no_grad():
-            for p, p_targ in zip(self.ac.parameters(), self.ac_targ.parameters()):
-                # NB: We use an in-place operations "mul_", "add_" to update target
-                # params, as opposed to "mul" and "add", which would make new tensors.
-                p_targ.data.mul_(self.polyak)
-                p_targ.data.add_((1 - self.polyak) * p.data)
-
-        if not self.debug: 
-            loss_info.update({f'warmup_epoch': epoch})
-            loss_info.update({'optim/warmup_q_lr': self.warmup_q_optimizer.param_groups[0]['lr']})
-            loss_info.update({'optim/warmup_pi_lr': self.warmup_pi_optimizer.param_groups[0]['lr']})
-            wandb.log(loss_info, step=step)
-    
-    def initQ(self):
-
-        self.warmup_q_optimizer = AdamW(self.ac.q.parameters(), lr=self.warmup_cfg.warmup_q_lr)
-        self.warmup_pi_optimizer = AdamW(self.ac.pi.parameters(), lr=self.warmup_cfg.warmup_pi_lr)
-
-        self.create_dataloader()
-        step = 0
-        for epoch in trange(self.warmup_cfg.num_epochs):
-            for batch_idx, batch in enumerate(self.dataloader):
-                for k, v in batch.items():
-                    batch[k] = v.to(self.device)
-                self.warmup_update(epoch, step, batch)
-                step += 1
-            if (epoch % self.plot_save_freq == 0) and self.eval_cfg.eval_value_fn:
-                # Plot value function
-                v = self.get_value_fn()
-                self.test_env.plot_value_fn(v.detach().cpu().numpy(),
-                    self.test_env.grid_x,
-                    target_T=self.test_env.target_T,
-                    obstacle_T=self.test_env.obstacle_T,
-                    save_dir=self.figureFolder, 
-                    name=f'warmup_epoch_{epoch}')
-                
-        print(f"Warmup: {self.warmup_cfg.warmup_type} complete.")
-        
-        return step
-    
-    def add_expert_to_buffer(self):
-        dataset =  AnalyticalExpertDataset(
-            self.test_env, 
-            data_frac=self.train_cfg.expert_data_frac, 
-            filename=self.train_cfg.expert_data_loc)
-        expert_dataloader = torch.utils.data.DataLoader(
-            dataset,
-            batch_size=1,
-            shuffle=True,
-            pin_memory=True,
-            drop_last=True,
-            num_workers=8,
-        )
-        print("Adding expert demonstrations to buffer")
-        for batch_idx, batch in enumerate(expert_dataloader):
-            o, a, r = batch['xt'].flatten(), batch['ut'].flatten(), batch['rt'].flatten()
-            o2, d = batch['xtp1'].flatten(), batch['done'].flatten()
-            lx, gx  = batch['lx'].flatten(), batch['gx'].flatten()
-            d = d > 0.  # bool
-            self.replay_buffer.store(o, a, r, o2, d, lx, gx)
-
-        self.replay_buffer.ptr_start = len(dataset)
-        assert len(dataset) < self.replay_buffer.max_size, "Size of expert dataset if greater than the max buffer storage allowed."
-        print("DONE Adding expert demonstrations to buffer")
-
     # Set up function for computing DDPG Q-loss
     def compute_loss_q(self, data):
         o, a, r, o2, d = data['obs'], data['act'], data['rew'], data['obs2'], data['done']
         lx, gx = data['lx'], data['gx']
 
-        q = self.ac.q(o,a)
+        q = self.ac.action_value(o,a)
 
         # Bellman backup for Q function
         with torch.no_grad():
-            q_pi_targ = self.ac_targ.q(o2, self.ac_targ.pi(o2))
+            q_pi_targ = self.ac_targ.value(o2)['q_policy']
             if self.mode == 'RA':
                 backup = torch.zeros(q.shape).float().to(self.device)
-                done = d > 0.
-                not_done = torch.logical_not(done)
-
-                # non_terminal = torch.min(
-                #     gx[not_done],
-                #     torch.max(lx[not_done], q_pi_targ[not_done]),
-                # )
-                # terminal = torch.min(lx, gx)
-                # # normal state
-                # backup[not_done] = non_terminal * self.gamma + terminal[not_done] * (1 - self.gamma)
-                # backup[done] = terminal[done]
-
                 non_terminal = torch.min(
                     gx,
                     torch.max(lx, q_pi_targ),
                 )
                 terminal = torch.min(lx, gx)
                 backup = non_terminal * self.gamma + terminal * (1 - self.gamma)
-
             else:
                 backup = r + self.gamma * (1 - d) * q_pi_targ
 
         # MSE loss against Bellman backup
         loss_q = self.train_cfg.scale_q_loss * ((q - backup)**2).mean()
+
         # Useful info for logging
         loss_info = dict(QVals=q.detach().cpu().numpy())
 
@@ -425,44 +225,52 @@ class DDPG(torch.nn.Module):
     # Set up function for computing DDPG pi loss
     def compute_loss_pi(self, data):
         o = data['obs']
-        q_pi = self.ac.q(o, self.ac.pi(o))
+        q_pi = self.ac.value(o)['q_policy']
         return -q_pi.mean()
 
     def update(self, data, epoch):
         # First run one gradient descent step for Q.
-        self.q_optimizer.zero_grad()
+        self.ac.q_optimizer.zero_grad()
         loss_q, loss_info = self.compute_loss_q(data)
         loss_q.backward()
-        self.q_optimizer.step()
-        self.q_scheduler.step(epoch)
+        torch.nn.utils.clip_grad_value_(self.ac.parameters(), self.train_cfg.optimizer.clip_grad_norm)
+        self.ac.q_optimizer.step()
+        self.ac.q_scheduler.step(epoch)
 
         # Freeze Q-network so you don't waste computational effort 
         # computing gradients for it during the policy learning step.
-        for p in self.ac.q.parameters():
+        for p in self.ac.get_q_parameters():
             p.requires_grad = False
 
         # Next run one gradient descent step for pi.
-        self.pi_optimizer.zero_grad()
+        self.ac.pi_optimizer.zero_grad()
         loss_pi = self.compute_loss_pi(data)
         loss_pi.backward()
-        self.pi_optimizer.step()
-        self.pi_scheduler.step(epoch)
+        torch.nn.utils.clip_grad_value_(self.ac.parameters(), self.train_cfg.optimizer.clip_grad_norm)
+        self.ac.pi_optimizer.step()
+        self.ac.pi_scheduler.step(epoch)
 
         # Unfreeze Q-network so you can optimize it at next DDPG step.
-        for p in self.ac.q.parameters():
+        for p in self.ac.get_q_parameters():
             p.requires_grad = True
 
         # Finally, update target networks by polyak averaging.
+        # start = time.time()
         with torch.no_grad():
             for p, p_targ in zip(self.ac.parameters(), self.ac_targ.parameters()):
                 # NB: We use an in-place operations "mul_", "add_" to update target
                 # params, as opposed to "mul" and "add", which would make new tensors.
                 p_targ.data.mul_(self.polyak)
                 p_targ.data.add_((1 - self.polyak) * p.data)
+        # print(f'Time for polyak averaging = {time.time()-start}')
+
         return loss_q.item(), loss_pi.item(), loss_info
 
     def get_action(self, o, noise_scale):
-        a = self.ac.act(torch.as_tensor(o, dtype=torch.float32).to(self.device))
+        # a = self.ac.act(torch.as_tensor(o, dtype=torch.float32).to(self.device))
+        
+        o = self.replay_buffer.get_batch_from_obs(o)
+        a = self.ac.act(o)
         a += noise_scale * np.random.randn(self.act_dim)
         return np.clip(a, self.env.action_space.low, self.env.action_space.high)
 
@@ -493,14 +301,18 @@ class DDPG(torch.nn.Module):
         for i in trange(num_episodes, desc="Testing"):
             o, d, ep_ret = self.test_env.reset(), False, 0
 
-            pred_v = self.ac_targ.q(
-                torch.from_numpy(o).float().to(self.device), 
-                self.ac_targ.pi(torch.from_numpy(o).float().to(self.device))).detach().cpu().numpy()
-            pred_success = pred_v > 0.
+            with torch.no_grad():
+                o = self.replay_buffer.get_batch_from_obs(o)
+                outputs = self.ac_targ.value(o)
+            # pred_v = self.ac_targ(
+            #     torch.from_numpy(o).float().to(self.device), 
+            #     self.ac_targ.pi(torch.from_numpy(o).float().to(self.device))).detach().cpu().numpy()
+                
+            pred_success = outputs['q_policy'].detach().cpu().numpy() > 0.
             
             gt_success = False
             while not(d or (self.test_env.current_timestep == self.max_ep_len)):
-                o, r, d, _ = self.test_env.step(self.get_action(o, 0))
+                o, r, d, _ = self.test_env.step(outputs['action'].detach().cpu().numpy())
                 ep_ret += r
             avg_return += ep_ret
             avg_ep_len += self.test_env.current_timestep
@@ -539,6 +351,7 @@ class DDPG(torch.nn.Module):
         return info
 
     def learn(self, start_step=0, ckpt=None):
+        
         if ckpt is not None:
             self.load_state_dict(ckpt["state_dict"])
 
@@ -556,7 +369,6 @@ class DDPG(torch.nn.Module):
         # Main loop: collect experience in env and update/log each epoch
         epoch=0
         for t in trange(start_step, total_steps):
-            # start_allt = time.time()
             # torch.cuda.empty_cache()
             self.env.epoch = epoch
             self.test_env.epoch = epoch
@@ -601,19 +413,20 @@ class DDPG(torch.nn.Module):
             # Update handling
             if t >= self.update_after and t % self.update_every == 0:
                 for _ in range(self.update_steps):
-                    batch = self.replay_buffer.sample_batch(self.batch_size)   
+                    batch = self.replay_buffer.sample_batch(self.batch_size)
                     loss_q, loss_pi, loss_info = self.update(batch, epoch)
                     if not self.debug:
                         log_dict.update({f'loss_q': loss_q})
                         log_dict.update({f'loss_pi': loss_pi})
                         log_dict.update(loss_info)
-
+                
             # End of epoch handling
             if (t+1-start_step) % self.steps_per_epoch == 0:
                 epoch = (t+1-start_step) // self.steps_per_epoch
 
                 print(f"time for epoch {epoch} = {time.time()-start_epoch}")
                 start_epoch = time.time()
+
 
                 if self.train_cfg.schedule_gamma:
                     self.gamma = self.gamma_list[min(epoch, self.epochs-1)]
@@ -622,7 +435,11 @@ class DDPG(torch.nn.Module):
 
                 # Test the performance of the deterministic version of the agent.
                 print(f"Testing at epoch: {epoch}")
+
+                start = time.time()
                 test_info = self.test_agent(epoch)
+                print(f"time for testing: {time.time()-start}")
+
                 avg_test_return = test_info['Average_return']
                 success_rate = test_info['success_rate']
 
@@ -632,35 +449,33 @@ class DDPG(torch.nn.Module):
                     save_file_name = os.path.join(self.modelFolder, f"step_{t}_test_return_{avg_test_return:.2f}_succRate_{success_rate:.2f}.pth")
                     status = self.topk_logger.push(save_file_name, success_rate)
                     if status:
+                        start = time.time()
                         torch.save(
                             obj={
                                 "state_dict": self.state_dict(),
                                 "env_name": self.env_name,
                                 "train_cfg": self.train_cfg,
                                 "env_cfg": self.env_cfg,
-                                "pi_optimizer_state": self.pi_optimizer.state_dict(),
-                                "q_optimizer_state": self.q_optimizer.state_dict(),
+                                "q_optimizer_state": self.ac.q_optimizer.state_dict(),
+                                "pi_optimizer_state": self.ac.pi_optimizer.state_dict(),
                                 "epoch": epoch,
                             },
                             f=save_file_name,
                         )
                         if not self.debug:
                             wandb.save(save_file_name, base_path=os.path.join(self.modelFolder, '..'))
-
+                        print(f'Saving time at epoch {epoch} = {time.time()-start}')
                     if not self.debug:
                         log_dict.update({f'Epoch': epoch})
                         log_dict.update({f'gamma': self.gamma})
                         log_dict.update({f'act_noise': self.act_noise})
-
-                        log_dict.update(test_info)
-
                         log_dict.update({f'Time': time.time()-start_time})
-                        log_dict.update({'optim/q_lr': self.q_optimizer.param_groups[0]['lr']})
-                        log_dict.update({'optim/pi_lr': self.pi_optimizer.param_groups[0]['lr']})
-
+                        log_dict.update({'optim/q_lr': self.ac.q_optimizer.param_groups[0]['lr']})
+                        log_dict.update({'optim/pi_lr': self.ac.pi_optimizer.param_groups[0]['lr']})
+                        log_dict.update(test_info)
             if not self.debug:
                 wandb.log(log_dict, step=t)
-        
+                    
         # Eval best checkpoint so far
         ckpt = torch.load(self.topk_logger.best_ckpt(), map_location=self.device)
         self.eval(ckpt, self.eval_cfg, debug=False) # uploading stuff to wandb
@@ -688,15 +503,17 @@ class DDPG(torch.nn.Module):
             o, d, ep_ret, ep_len = self.test_env.reset(start=init_s), False, 0, 0
             rollout.append(o)
 
-            pred_v = self.ac_targ.q(
-                torch.from_numpy(o).float().to(self.device), 
-                self.ac_targ.pi(torch.from_numpy(o).float().to(self.device))).detach().cpu().numpy()
-            pred_success = pred_v > 0.
+            with torch.no_grad():
+                o = self.replay_buffer.get_batch_from_obs(o)
+                outputs = self.ac_targ.value(o)
+
+            pred_success = outputs['q_policy'].detach().cpu().numpy() > 0.
+
             gt_success = False
 
             while not(d or (ep_len == self.max_ep_len)):
                 # Take deterministic actions at test time (noise_scale=0)
-                at = self.get_action(o, 0)
+                at = outputs['action'].detach().cpu().numpy()
                 o, r, d, _ = self.test_env.step(at)
                 # fail, _ = self.test_env.check_failure(o.reshape(1,self.test_env.n))
                 # succ, _ = self.test_env.check_success(o.reshape(1,self.test_env.n))
@@ -716,7 +533,7 @@ class DDPG(torch.nn.Module):
                 file_name = f'eval_traj_{self.mode}_{len(trajs)}_pred_succ_{pred_success}_gt_succ_{gt_success}_{self.test_env.failure_mode}'
                 imageio.mimsave(os.path.join(self.figureFolder, f'{file_name}.gif'), 
                     imgs, duration=ep_len*self.test_env.dt)
-                self.test_env.plot_trajectory(np.stack(rollout,axis=0), np.stack(at_all,axis=0), os.path.join(self.figureFolder, f'{file_name}.png'))
+                # self.test_env.plot_trajectory(np.stack(rollout,axis=0), np.stack(at_all,axis=0), os.path.join(self.figureFolder, f'{file_name}.png'))
         return trajs
 
     def eval(self, ckpt=None, eval_cfg=None, debug=True):

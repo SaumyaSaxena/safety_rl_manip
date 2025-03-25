@@ -262,10 +262,10 @@ class ReplayBufferMultimodal:
       obs=sample_obs,
       obs2=sample_obs2,
       act=torch.as_tensor(self.act_buf[idxs], dtype=torch.float32).unsqueeze(1).to(self.device),
-      rew=torch.as_tensor(self.rew_buf[idxs], dtype=torch.float32).unsqueeze(1).to(self.device),
-      done=torch.as_tensor(self.done_buf[idxs], dtype=torch.float32).unsqueeze(1).to(self.device),
-      lx=torch.as_tensor(self.lx_buf[idxs], dtype=torch.float32).unsqueeze(1).to(self.device),
-      gx=torch.as_tensor(self.gx_buf[idxs], dtype=torch.float32).unsqueeze(1).to(self.device)
+      rew=torch.as_tensor(self.rew_buf[idxs], dtype=torch.float32).to(self.device),
+      done=torch.as_tensor(self.done_buf[idxs], dtype=torch.float32).to(self.device),
+      lx=torch.as_tensor(self.lx_buf[idxs], dtype=torch.float32).to(self.device),
+      gx=torch.as_tensor(self.gx_buf[idxs], dtype=torch.float32).to(self.device)
     )
     return batch
   

@@ -39,6 +39,7 @@ class SlidePickupClutterMujocoMultimodalEnv(gym.Env, EzPickle):
         self._did_see_sim_exception = False
         self.goal = np.array(self.env_cfg.goal)
         self.observations = self.env_cfg.observations
+        self.constraint_type_repr = self.env_cfg.get('constraint_type_repr', 'int')
 
         self.all_blocks_object_names = [self.env_cfg.block_bottom.block_name, self.env_cfg.block_top.block_name] + self.env_cfg.objects.names
 
@@ -53,15 +54,20 @@ class SlidePickupClutterMujocoMultimodalEnv(gym.Env, EzPickle):
             f'{self.env_cfg.block_top.block_name}': 2
         }
         self.constraint_to_int_mapping = {
-            'any_contact': 5,
-            'soft_contact': 6,
-            'no_contact': 7
+            'any_contact': 3,
+            'soft_contact': 4,
+            'no_contact': 5
         }
-
+        self.max_constraint_types = 6
+    
         if self.use_constraint_types:
-            self.low_dim_sizes = {'robot0': 7, 'objects': 7}
+            if self.constraint_type_repr == 'int':
+                self.low_dim_sizes = {'robot0': 7, 'objects': 7}
+            elif self.constraint_type_repr == 'one_hot':
+                self.low_dim_sizes = {'robot0': 6+self.max_constraint_types, 'objects': 6+self.max_constraint_types}
         else:
             self.low_dim_sizes = {'robot0': 6, 'objects': 6}
+
         self.low_dim_sizes['full_size'] = self.low_dim_sizes['robot0'] + (2+self.n_rel_objs)*self.low_dim_sizes['objects']
         self.set_observation_shapes()
 
@@ -719,25 +725,44 @@ class SlidePickupClutterMujocoMultimodalEnv(gym.Env, EzPickle):
         """
         obs = {} # observation dict
         ee_vel_t = (self.ee_pos-self.ee_pos_tm1)/self.dt
-        ee_state = np.concatenate([self.ee_pos, ee_vel_t, [self.object_type_to_int_mapping['ee']]])
+
+        if self.constraint_type_repr == 'int':
+            const_type_rep = [self.object_type_to_int_mapping['ee']]
+        elif self.constraint_type_repr == 'one_hot':
+            const_type_rep = np.zeros(self.max_constraint_types)
+            const_type_rep[self.object_type_to_int_mapping['ee']] = 1
+
+        ee_state = np.concatenate([self.ee_pos, ee_vel_t, const_type_rep])
         obs['robot_state'] = ee_state
 
         if 'objects_state' in self.observations['low_dim']:
             xt = []
             for i, body_name in enumerate([self.env_cfg.block_bottom.block_name, self.env_cfg.block_top.block_name]):
+                if self.constraint_type_repr == 'int':
+                    const_type_rep = [self.object_type_to_int_mapping[body_name]]
+                elif self.constraint_type_repr == 'one_hot':
+                    const_type_rep = np.zeros(self.max_constraint_types)
+                    const_type_rep[self.object_type_to_int_mapping[body_name]] = 1
+
                 body_state = np.concatenate([
                     self._get_body_pos(body_name), 
                     self._get_body_vel(body_name),
-                    [self.object_type_to_int_mapping[body_name]]]
+                    const_type_rep]
                 )
                 xt.append(body_state)
 
             for i, body_name in enumerate(self.rel_obj_names):
                 if self.use_constraint_types:
+                    if self.constraint_type_repr == 'int':
+                        const_type_rep = [self.constraint_to_int_mapping[self.pred_constraint_types[body_name]]]
+                    elif self.constraint_type_repr == 'one_hot':
+                        const_type_rep = np.zeros(self.max_constraint_types)
+                        const_type_rep[self.constraint_to_int_mapping[self.pred_constraint_types[body_name]]] = 1
+
                     body_state = np.concatenate([
                         self._get_body_pos(body_name), 
                         self._get_body_vel(body_name), 
-                        [self.constraint_to_int_mapping[self.pred_constraint_types[body_name]]]])
+                        const_type_rep])
                 else:
                     body_state = np.append(self._get_body_pos(body_name), self._get_body_vel(body_name))
                 xt.append(body_state)

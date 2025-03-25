@@ -238,6 +238,7 @@ slide_pickup_clutter_mujoco_env-v0:
 
 slide_pickup_clutter_mujoco_multimodal_env-v0:
   n_rel_objs: 3
+  constraint_type_repr: 'one_hot' # 'int', 'one_hot'
   use_constraint_types: True # Always set to True since we are appending object/constraint types to object states 
   constraint_types: ['no_contact'] # when use_constraint_types=True, constraint types sampled from here during training; ['soft_contact', 'no_contact']
   obj_to_constraint_map: # when use_constraint_types=True, not used during training

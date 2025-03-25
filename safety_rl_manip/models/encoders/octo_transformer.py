@@ -133,8 +133,8 @@ class OctoTransformer(nn.Module):
             nn.init.xavier_uniform_(layer.weight)
             if layer.bias is not None:
                 nn.init.normal_(layer.bias)
-            
-
+                
+        
     def forward(
         self,
         observations: Dict,
@@ -233,8 +233,9 @@ class OctoTransformer(nn.Module):
             group_name = f"obs_{name}"
             # Receive inputs from tokenizer and cast to embedding size
             tokenizer_output: TokenGroup = tok(observations, tasks)
+            
             if tokenizer_output is None:
-                logging.warning(f"Skipping observation tokenizer: {group_name}")
+                # logging.warning(f"Skipping observation tokenizer: {group_name}")
                 continue
 
             obs_tokens = self.observation_dense_layers[i](tokenizer_output.tokens)

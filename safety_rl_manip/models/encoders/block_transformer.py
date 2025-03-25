@@ -138,9 +138,12 @@ class BlockTransformer(nn.Module):
         # Enforce that timestep causal structure is not broken (future timesteps can't attend to past timesteps)
         self.enforce_causal = enforce_causal
         self.num_attention_heads = transformer_kwargs['num_attention_heads']
-        self.transformer = Transformer(**transformer_kwargs, device=device)
+        
         self.device = device
         self.attention_mask = None
+        self.transformer_kwargs = transformer_kwargs
+        self.attention_type = transformer_kwargs.get('attention_type', 'SA')
+        self.transformer = Transformer(**transformer_kwargs, device=device)
     
     def forward(
         self,
@@ -179,31 +182,47 @@ class BlockTransformer(nn.Module):
         assert all([group.tokens.shape[-1] == token_dim for group in prefix_groups])
         assert all([group.tokens.shape[-1] == token_dim for group in timestep_groups])
 
-        # Assemble input tokens (batch, total_tokens, token_embedding_size)
-        input_tokens = self.assemble_input_tokens(prefix_groups, timestep_groups)
-        # Creates correct attention mask for transformer using group attention rules and masks
-        # Shape: (batch*num_heads, total_tokens, total_tokens)
-        # Need to generate attention mask only once. After that it can be reused. TODO(saumya): Make this less hacky
-        if self.attention_mask is None:
-            self.attention_mask = self.generate_attention_mask(prefix_groups, timestep_groups, self.num_attention_heads)
+        if self.attention_type == 'SA':
+            # Assemble input tokens (batch, total_tokens, token_embedding_size)
+            input_tokens = self.assemble_input_tokens(prefix_groups, timestep_groups)
+            # Creates correct attention mask for transformer using group attention rules and masks
+            # Shape: (batch*num_heads, total_tokens, total_tokens)
+            # Need to generate attention mask only once. After that it can be reused. TODO(saumya): Make this less hacky
+            if self.attention_mask is None:
+                self.attention_mask = self.generate_attention_mask(prefix_groups, timestep_groups, self.num_attention_heads)
 
-        # pad_attention_mask = self.generate_pad_attention_mask(
-        #     prefix_groups, timestep_groups, self.num_attention_heads
-        # )
-        # comb_attention_mask = torch.logical_not(torch.logical_and(self.attention_mask, pad_attention_mask))
-        # comb_attention_mask = comb_attention_mask.repeat(1,self.num_attention_heads,1,1)
-        # comb_attention_mask = comb_attention_mask.reshape(-1,comb_attention_mask.shape[2],comb_attention_mask.shape[3])
-        # # comb_attention_mask = comb_attention_mask.to(dtype=torch.float32)
-        # Run transformer
+            # pad_attention_mask = self.generate_pad_attention_mask(
+            #     prefix_groups, timestep_groups, self.num_attention_heads
+            # )
+            # comb_attention_mask = torch.logical_not(torch.logical_and(self.attention_mask, pad_attention_mask))
+            # comb_attention_mask = comb_attention_mask.repeat(1,self.num_attention_heads,1,1)
+            # comb_attention_mask = comb_attention_mask.reshape(-1,comb_attention_mask.shape[2],comb_attention_mask.shape[3])
+            # # comb_attention_mask = comb_attention_mask.to(dtype=torch.float32)
+            # Run transformer
 
-        comb_attention_mask = torch.zeros(self.attention_mask.shape, dtype=torch.bool).to(self.device)
-        output = self.transformer(
-            input_tokens, comb_attention_mask, train=train
-        )
-        # Split output into prefix and timestep groups
-        all_prefix_outputs, all_timestep_outputs = self.split_output_tokens(
-            output, prefix_groups, timestep_groups
-        )
+            comb_attention_mask = torch.zeros(self.attention_mask.shape, dtype=torch.bool).to(self.device)
+            output = self.transformer(
+                input_tokens, attention_mask=comb_attention_mask
+            )
+            # Split output into prefix and timestep groups
+            all_prefix_outputs, all_timestep_outputs = self.split_output_tokens(
+                output, prefix_groups, timestep_groups
+            )
+        elif self.attention_type == 'AdaLN' or self.attention_type == 'CA':
+            all_token_names = [self.get_token_name_from_group_name(pg.name) for pg in prefix_groups] + [self.get_token_name_from_group_name(tg.name) for tg in timestep_groups]
+            non_condn_tokens = list(set(all_token_names) - set(self.transformer_kwargs.condn_tokens))
+            input_tokens = self.assemble_input_tokens_from_group_names(non_condn_tokens, prefix_groups, timestep_groups)
+            condn_tokens = self.assemble_input_tokens_from_group_names(self.transformer_kwargs.condn_tokens, prefix_groups, timestep_groups)
+            output = self.transformer(
+                input_tokens, cond=condn_tokens, attention_mask=None
+            )
+            all_prefix_outputs, all_timestep_outputs = self.split_output_tokens_from_group_names(
+                non_condn_tokens, output, prefix_groups, timestep_groups
+            )
+        else:
+            raise NotImplementedError('Attention type not implemented!')
+        
+        
         # with torch.cuda.device(self.device):
         #     torch.cuda.empty_cache()
         return all_prefix_outputs, all_timestep_outputs
@@ -245,6 +264,56 @@ class BlockTransformer(nn.Module):
         tokens = torch.concatenate([all_prefix_tokens, all_timestep_tokens], axis=1)
         return tokens
 
+    def assemble_input_tokens_from_group_names(
+        self,
+        group_names,
+        prefix_groups: Sequence[PrefixGroup],
+        timestep_groups: Sequence[TimestepGroup],
+    ):
+        """
+        - Concatenate all timestep tokens together
+        - Fold horizon dim into token sequence dim.
+        - Prepend task tokens.
+
+        Returns:
+            tokens: A tensor of shape (batch, total_tokens, token_embedding_size)
+        """
+        if len(prefix_groups) > 0:
+            all_prefix_tokens = torch.concatenate(
+                [group.tokens for group in prefix_groups if self.get_token_name_from_group_name(group.name) in group_names], axis=1
+            )
+        else:
+            all_prefix_tokens = torch.zeros(
+                (
+                    timestep_groups[0].tokens.shape[0],
+                    0,
+                    timestep_groups[0].tokens.shape[-1],
+                ),
+                dtype=torch.float32,
+            ).to(self.device)
+
+        all_timestep_tokens = torch.concatenate(
+            [group.tokens for group in timestep_groups if self.get_token_name_from_group_name(group.name) in group_names], axis=2
+        )
+
+        all_timestep_tokens = einops.rearrange(
+            all_timestep_tokens,
+            "batch horizon n_tokens d -> batch (horizon n_tokens) d",
+        )
+        tokens = torch.concatenate([all_prefix_tokens, all_timestep_tokens], axis=1)
+        return tokens
+    
+    def get_token_name_from_group_name(self, group_name):
+        if group_name.startswith('obs_'):
+            token_name = group_name.split('obs_')[1]
+        elif group_name.startswith('readout_'):
+            token_name = group_name.split('readout_')[1]
+        elif group_name.startswith('task_'):
+            token_name = group_name.split('task_')[1]
+        else:
+            raise NotImplementedError('Invalid group name!')
+        return token_name
+    
     def split_output_tokens(
         self,
         output_tokens: torch.Tensor,
@@ -266,10 +335,7 @@ class BlockTransformer(nn.Module):
             prefix_embeddings_split = split_tokens(
                 prefix_embeddings, tokens_per_prefix_group, axis=1
             )
-            # all_prefix_outputs = [
-            #     group.replace(tokens=embeddings)
-            #     for group, embeddings in zip(prefix_groups, prefix_embeddings_split)
-            # ]
+
             all_prefix_outputs = []
             for group, embeddings in zip(prefix_groups, prefix_embeddings_split):
                 group.tokens = embeddings
@@ -289,17 +355,65 @@ class BlockTransformer(nn.Module):
             timestep_embeddings, tokens_per_timestep_group, axis=2
         )
 
-        # all_timestep_outputs = [
-        #     group.replace(tokens=embeddings)
-        #     for group, embeddings in zip(timestep_groups, timestep_embeddings_split)
-        # ]
         all_timestep_outputs = []
         for group, embeddings in zip(timestep_groups, timestep_embeddings_split):
             group.tokens = embeddings
             all_timestep_outputs.append(group)
 
         return all_prefix_outputs, all_timestep_outputs
+    
+    def split_output_tokens_from_group_names(
+        self,
+        group_names,
+        output_tokens: torch.Tensor,
+        prefix_groups: Sequence[PrefixGroup],
+        timestep_groups: Sequence[TimestepGroup],
+    ):
+        """Reverses the process of assemble_input_tokens."""
 
+        horizon = timestep_groups[0].tokens.shape[1]
+        tokens_per_prefix_group = [group.tokens.shape[1] for group in prefix_groups if self.get_token_name_from_group_name(group.name) in group_names]
+        n_prefix_tokens = sum(tokens_per_prefix_group)
+        n_other_tokens = output_tokens.shape[1] - n_prefix_tokens
+        prefix_embeddings, timestep_embeddings = torch.split(
+            output_tokens, [n_prefix_tokens, n_other_tokens], dim=1
+        )
+
+        # Process prefix group outputs
+        if len(prefix_groups) > 0:
+            prefix_embeddings_split = split_tokens(
+                prefix_embeddings, tokens_per_prefix_group, axis=1
+            )
+            
+            rel_prefix_groups = [group for group in prefix_groups if self.get_token_name_from_group_name(group.name) in group_names]
+            all_prefix_outputs = []
+            for group, embeddings in zip(rel_prefix_groups, prefix_embeddings_split):
+                group.tokens = embeddings
+                all_prefix_outputs.append(group)
+
+        else:
+            all_prefix_outputs = []
+
+        # Process timestep group outputs
+        timestep_embeddings = einops.rearrange(
+            timestep_embeddings,
+            "batch (horizon n_tokens) d -> batch horizon n_tokens d",
+            horizon=horizon,
+        )
+
+        tokens_per_timestep_group = [group.tokens.shape[2] for group in timestep_groups if self.get_token_name_from_group_name(group.name) in group_names]
+        timestep_embeddings_split = split_tokens(
+            timestep_embeddings, tokens_per_timestep_group, axis=2
+        )
+        rel_timestep_groups = [group for group in timestep_groups if self.get_token_name_from_group_name(group.name) in group_names]
+
+        all_timestep_outputs = []
+        for group, embeddings in zip(rel_timestep_groups, timestep_embeddings_split):
+            group.tokens = embeddings
+            all_timestep_outputs.append(group)
+
+        return all_prefix_outputs, all_timestep_outputs
+    
     def generate_attention_mask(
         self,
         prefix_groups: Sequence[PrefixGroup],
@@ -419,7 +533,7 @@ class BlockTransformer(nn.Module):
                 assert (
                     rule != AttentionRule.ALL
                 ), "Causality broken! WhenToAttend.ALL attends to future timesteps too."
-
+        
     def pretty_print_attention_mask(
         self,
         prefix_groups: Sequence[PrefixGroup],

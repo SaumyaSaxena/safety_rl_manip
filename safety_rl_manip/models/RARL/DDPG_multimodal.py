@@ -202,7 +202,8 @@ class DDPGMultimodal(torch.nn.Module):
         # Bellman backup for Q function
         with torch.no_grad():
             # q_pi_targ = self.ac_targ.q(o2, self.ac_targ.pi(o2))
-            q_pi_targ = self.ac_targ(o2, a)['q_policy']
+            # q_pi_targ = self.ac_targ(o2, a)['q_policy']
+            q_pi_targ = self.ac_targ.value['q_policy']
             if self.mode == 'RA':
                 backup = torch.zeros(q.shape).float().to(self.device)
                 non_terminal = torch.min(

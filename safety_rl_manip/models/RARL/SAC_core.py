@@ -6,7 +6,10 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.distributions.normal import Normal
 
+import itertools
+
 from timm.scheduler.scheduler_factory import create_scheduler
+from torch.optim.lr_scheduler import CosineAnnealingWarmRestarts
 from torch.optim import AdamW
 
 from .utils import mlp
@@ -197,23 +200,6 @@ class SACTransformerActorCritic(nn.Module):
         q2 = self.value_head2(transformer_outputs, action, train=train)
         return q1, q2
     
-    def forward(self, obs, action, train=True, verbose=False):
-        transformer_outputs = self.encode_obs(obs, train=train)
-
-        q1_sample, q2_sample = self.forward_value(transformer_outputs, action, train=train)
-
-        action_pred, logp_action = self.forward_action(transformer_outputs, train=train)
-
-        q_policy = self.forward_value(transformer_outputs, action_pred[:,:,0,:], train=train) # TODO: considering the action at current time step
-        outputs = {
-            'action': action_pred[:,-1,0,:],
-            'logp_action': logp_action[:,-1,0],
-            'q1_sample': q1_sample[:,-1,0,0],
-            'q2_sample': q2_sample[:,-1,0,0],
-            'q_policy': q_policy[:,-1,0,0],
-        }
-        return outputs
-    
     def create_optimizers(self, optimizer_cfg):
         # Set up optimizers and schedulers for policy and q-function
         self.optimizer = AdamW(self.parameters(), lr=optimizer_cfg.lr, 
@@ -256,3 +242,179 @@ class SACTransformerActorCritic(nn.Module):
                 'q2_policy': q2_policy[:,-1,0,0],
             }
         return outputs
+
+class SACTransformerIndepActorCritic(nn.Module):
+
+    def __init__(
+            self, 
+            env_observation_shapes, 
+            action_space,
+            device,
+            ac_kwargs = dict(),
+        ):
+        super().__init__()
+
+        self.window_size = ac_kwargs.window_size
+        self.action_dim = action_space.shape[0]
+        min_action = torch.from_numpy(action_space.low).to(device)
+        max_action = torch.from_numpy(action_space.high).to(device)
+        self.device = device
+
+        env_observation_shapes['action'] = (self.action_dim,)
+
+        # create observation tokenizers
+        self.observation_tokenizers, obs_tokenizer_names = nn.ModuleList(), []
+        for obs_tokenizer, tokenizer_kwargs in ac_kwargs.observation_tokenizers.items():
+            if len(tokenizer_kwargs.kwargs.obs_stack_keys) > 0:
+                self.observation_tokenizers.append(eval(tokenizer_kwargs.name)(
+                    **tokenizer_kwargs.kwargs, 
+                    env_observation_shapes=env_observation_shapes, 
+                    device=device))
+                obs_tokenizer_names.append(obs_tokenizer)
+        
+        self.Q1_transformer = OctoTransformer(
+            observation_tokenizers_names = obs_tokenizer_names,
+            observation_tokenizers=self.observation_tokenizers,
+            task_tokenizers_names=[],
+            task_tokenizers=[],
+            readouts=ac_kwargs.readouts_critic,
+            token_embedding_size=ac_kwargs.token_embedding_size,
+            max_tokens=ac_kwargs.max_tokens,
+            transformer_kwargs=ac_kwargs.Q_transformer_kwargs,
+            device=device,
+        )
+
+        self.Q2_transformer = OctoTransformer(
+            observation_tokenizers_names = obs_tokenizer_names,
+            observation_tokenizers=self.observation_tokenizers,
+            task_tokenizers_names=[],
+            task_tokenizers=[],
+            readouts=ac_kwargs.readouts_critic,
+            token_embedding_size=ac_kwargs.token_embedding_size,
+            max_tokens=ac_kwargs.max_tokens,
+            transformer_kwargs=ac_kwargs.Q_transformer_kwargs,
+            device=device,
+        )
+
+        self.pi_transformer = OctoTransformer(
+            observation_tokenizers_names = obs_tokenizer_names,
+            observation_tokenizers=self.observation_tokenizers,
+            task_tokenizers_names=[],
+            task_tokenizers=[],
+            readouts=ac_kwargs.readouts_actor,
+            token_embedding_size=ac_kwargs.token_embedding_size,
+            max_tokens=ac_kwargs.max_tokens,
+            transformer_kwargs=ac_kwargs.pi_transformer_kwargs,
+            device=device,
+        )
+
+        # Action head
+        self.action_head = eval(ac_kwargs.heads.action.name)(
+            **ac_kwargs.heads.action.kwargs,
+            action_dim=self.action_dim,
+            min_action=min_action,
+            max_action=max_action,
+            device=device)
+        
+        # Value head 1
+        self.value_head1 = eval(ac_kwargs.heads.value.name)(
+            **ac_kwargs.heads.value.kwargs,
+            embedding_size=ac_kwargs.token_embedding_size + self.action_dim,
+            device=device)
+        
+        # Value head 2
+        self.value_head2 = eval(ac_kwargs.heads.value.name)(
+            **ac_kwargs.heads.value.kwargs,
+            embedding_size=ac_kwargs.token_embedding_size + self.action_dim,
+            device=device)
+        
+    def get_q1_parameters(self):
+        return itertools.chain(self.value_head1.parameters(), self.Q1_transformer.parameters())
+
+    def get_q2_parameters(self):
+        return itertools.chain(self.value_head2.parameters(), self.Q2_transformer.parameters())
+    
+    def get_q_parameters(self):
+        return itertools.chain(self.get_q1_parameters(), self.get_q2_parameters())
+
+    def get_pi_parameters(self):
+        return itertools.chain(self.action_head.parameters(), self.pi_transformer.parameters())
+    
+    def freeze_q_params(self):
+        for p in self.get_q_parameters():
+            p.requires_grad = False
+    
+    def unfreeze_q_params(self):
+        for p in self.get_q_parameters():
+            p.requires_grad = True
+
+    def forward_action(self, obs, train=True):
+        '''
+            Output shape: [batch_size, window_size, pred_horizon, action_dim]
+        '''
+        batch_size = obs[list(obs.keys())[0]].shape[0]
+        pad_mask = torch.ones((batch_size, self.window_size), dtype=bool).to(device=self.device)
+        # obs['action'] = torch.zeros((batch_size, self.window_size, self.action_dim), device=self.device)
+        transformer_outputs = self.pi_transformer(
+            obs, tasks={}, pad_mask=pad_mask, train=train
+        )
+
+        return self.action_head(transformer_outputs)
+    
+    def forward_value(self, obs, action, train=True):
+        '''
+            Output shape: [batch_size, window_size, pred_horizon, value_dim]
+        '''
+        batch_size = obs[list(obs.keys())[0]].shape[0]
+        pad_mask = torch.ones((batch_size, self.window_size), dtype=bool).to(device=self.device)
+        obs['action'] = action
+        transformer_outputs1 = self.Q1_transformer(
+            obs, tasks={}, pad_mask=pad_mask, train=train
+        )
+        q1 = self.value_head1(transformer_outputs1, action, train=train)
+
+
+        transformer_outputs2 = self.Q2_transformer(
+            obs, tasks={}, pad_mask=pad_mask, train=train
+        )
+        q2 = self.value_head2(transformer_outputs2, action, train=train)
+
+        return q1, q2
+    
+    def act(self, obs):
+        with torch.no_grad():
+            return self.forward_action(obs, train=False)[:,-1,0,:].cpu().numpy()
+        
+    def value(self, obs):
+        action_pred, logp_action = self.forward_action(obs)
+        q1_policy, q2_policy = self.forward_value(obs, action_pred[:,:,0,:])
+        outputs = {
+            'action': action_pred[:,-1,0,:],
+            'logp_action': logp_action[:,-1,0],
+            'q1_policy': q1_policy[:,-1,0,0],
+            'q2_policy': q2_policy[:,-1,0,0],
+        }
+        return outputs
+
+    def action_value(self, obs, action):
+
+        if len(action.shape) == 2:
+            action = action.unsqueeze(1)
+        q1_sample, q2_sample = self.forward_value(obs, action)
+        return q1_sample[:,-1,0,0], q2_sample[:,-1,0,0]
+    
+    def pi(self, obs):
+        action_pred, logp_action = self.forward_action(obs)
+        return action_pred[:,-1,0,:], logp_action[:,-1,0]
+    
+    def create_optimizers(self, optimizer_cfg):
+        # Set up optimizers and schedulers for policy and q-function
+        self.q_optimizer = AdamW(self.get_q_parameters(), lr=optimizer_cfg.q_lr, 
+            eps=optimizer_cfg.AdamW.eps,
+            weight_decay=optimizer_cfg.AdamW.weight_decay)
+        self.q_scheduler, _ = create_scheduler(optimizer_cfg.scheduler, self.q_optimizer)
+
+        self.pi_optimizer = AdamW(self.get_pi_parameters(), lr=optimizer_cfg.pi_lr, 
+            eps=optimizer_cfg.AdamW.eps,
+            weight_decay=optimizer_cfg.AdamW.weight_decay)
+        self.pi_scheduler, _ = create_scheduler(optimizer_cfg.scheduler, self.pi_optimizer)
