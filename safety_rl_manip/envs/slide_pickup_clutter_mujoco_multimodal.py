@@ -28,6 +28,7 @@ from robosuite.utils.binding_utils import MjSim
 import robosuite.utils.sim_utils as SU
 from PIL import Image
 from scipy.ndimage import median_filter
+import time
 
 class SlidePickupClutterMujocoMultimodalEnv(gym.Env, EzPickle):
     def __init__(self, device, cfg):
@@ -40,6 +41,7 @@ class SlidePickupClutterMujocoMultimodalEnv(gym.Env, EzPickle):
         self.goal = np.array(self.env_cfg.goal)
         self.observations = self.env_cfg.observations
         self.constraint_type_repr = self.env_cfg.get('constraint_type_repr', 'int')
+        self.append_stack_to_robot_state = self.env_cfg.observations.get('append_stack_to_robot_state', False)
 
         self.all_blocks_object_names = [self.env_cfg.block_bottom.block_name, self.env_cfg.block_top.block_name] + self.env_cfg.objects.names
 
@@ -62,13 +64,14 @@ class SlidePickupClutterMujocoMultimodalEnv(gym.Env, EzPickle):
     
         if self.use_constraint_types:
             if self.constraint_type_repr == 'int':
-                self.low_dim_sizes = {'robot0': 7, 'objects': 7}
+                self.low_dim_sizes = {'robot0': 7, 'objects': 7, 'semantics': 1}
             elif self.constraint_type_repr == 'one_hot':
-                self.low_dim_sizes = {'robot0': 6+self.max_constraint_types, 'objects': 6+self.max_constraint_types}
+                self.low_dim_sizes = {'robot0': 6+self.max_constraint_types, 'objects': 6+self.max_constraint_types, 'semantics': self.max_constraint_types}
         else:
             self.low_dim_sizes = {'robot0': 6, 'objects': 6}
 
         self.low_dim_sizes['full_size'] = self.low_dim_sizes['robot0'] + (2+self.n_rel_objs)*self.low_dim_sizes['objects']
+
         self.set_observation_shapes()
 
         self.obj_to_constraint_map = self.env_cfg.obj_to_constraint_map
@@ -207,9 +210,19 @@ class SlidePickupClutterMujocoMultimodalEnv(gym.Env, EzPickle):
     
     def set_observation_shapes(self):
         self.observation_shapes = {}
-        self.observation_shapes['robot_state'] = (self.low_dim_sizes['robot0'],)
-        if 'objects_state' in self.observations['low_dim']:
-            self.observation_shapes['objects_state'] = (self.N_all_objects, self.low_dim_sizes['objects'])
+        if self.append_stack_to_robot_state:
+            self.observation_shapes['robot_state'] = (self.low_dim_sizes['robot0']+2*self.low_dim_sizes['objects'],)
+            if 'objects_state' in self.observations['low_dim']:
+                self.observation_shapes['objects_state'] = (self.N_dist_objects, self.low_dim_sizes['objects'])
+            if 'objects_semantics' in self.observations['low_dim']:
+                self.observation_shapes['objects_semantics'] = (self.N_dist_objects+1, self.low_dim_sizes['semantics'])
+        else:
+            self.observation_shapes['robot_state'] = (self.low_dim_sizes['robot0'],)
+            if 'objects_state' in self.observations['low_dim']:
+                self.observation_shapes['objects_state'] = (self.N_all_objects, self.low_dim_sizes['objects'])
+            if 'objects_semantics' in self.observations['low_dim']:
+                self.observation_shapes['objects_semantics'] = (self.N_all_objects+1, self.low_dim_sizes['semantics'])
+
         for k in self.observations['rgb']:
             self.observation_shapes[k] = (self.env_cfg.img_size[0], self.env_cfg.img_size[1], 3)
 
@@ -574,14 +587,15 @@ class SlidePickupClutterMujocoMultimodalEnv(gym.Env, EzPickle):
             self.do_simulation([-1, 1], self.frame_skip)
         
         self.ee_pos_tm1 = self.ee_pos.copy()
-        curr_state = self.get_current_relevant_state()
 
-        self.safety_set_top_low = curr_state['objects_state'][1, :3] + self.env_cfg.block_top.safety_set.low
-        self.safety_set_top_high = curr_state['objects_state'][1, :3] + self.env_cfg.block_top.safety_set.high
+        block_top_pos = self._get_body_pos(self.env_cfg.block_top.block_name)
+        self.safety_set_top_low = block_top_pos + self.env_cfg.block_top.safety_set.low
+        self.safety_set_top_high = block_top_pos + self.env_cfg.block_top.safety_set.high
 
         if self.env_cfg.block_bottom.target_set_type == 'relative':
-            self.target_set_low = curr_state['objects_state'][0, :3] + self.env_cfg.block_bottom.target_set.low
-            self.target_set_high = curr_state['objects_state'][0, :3] + self.env_cfg.block_bottom.target_set.high
+            block_bot_pos = self._get_body_pos(self.env_cfg.block_bottom.block_name)
+            self.target_set_low = block_bot_pos + self.env_cfg.block_bottom.target_set.low
+            self.target_set_high = block_bot_pos + self.env_cfg.block_bottom.target_set.high
         elif self.env_cfg.block_bottom.target_set_type == 'absolute':
             self.target_set_low = self.env_cfg.block_bottom.target_set.low
             self.target_set_high = self.env_cfg.block_bottom.target_set.high
@@ -735,8 +749,10 @@ class SlidePickupClutterMujocoMultimodalEnv(gym.Env, EzPickle):
         ee_state = np.concatenate([self.ee_pos, ee_vel_t, const_type_rep])
         obs['robot_state'] = ee_state
 
+        semantics = [const_type_rep]
+
         if 'objects_state' in self.observations['low_dim']:
-            xt = []
+            xt_stack, semantics_stack = [], []
             for i, body_name in enumerate([self.env_cfg.block_bottom.block_name, self.env_cfg.block_top.block_name]):
                 if self.constraint_type_repr == 'int':
                     const_type_rep = [self.object_type_to_int_mapping[body_name]]
@@ -749,8 +765,10 @@ class SlidePickupClutterMujocoMultimodalEnv(gym.Env, EzPickle):
                     self._get_body_vel(body_name),
                     const_type_rep]
                 )
-                xt.append(body_state)
+                xt_stack.append(body_state)
+                semantics_stack.append(const_type_rep)
 
+            xt_dist, semantics_dist = [], []
             for i, body_name in enumerate(self.rel_obj_names):
                 if self.use_constraint_types:
                     if self.constraint_type_repr == 'int':
@@ -763,10 +781,21 @@ class SlidePickupClutterMujocoMultimodalEnv(gym.Env, EzPickle):
                         self._get_body_pos(body_name), 
                         self._get_body_vel(body_name), 
                         const_type_rep])
+                    semantics_dist.append(const_type_rep)
                 else:
                     body_state = np.append(self._get_body_pos(body_name), self._get_body_vel(body_name))
-                xt.append(body_state)
-            obs['objects_state'] = np.stack(xt, axis=0)
+                xt_dist.append(body_state)
+            
+            if self.append_stack_to_robot_state:
+                obs['robot_state'] = np.concatenate([ee_state, *xt_stack])
+                obs['objects_state'] = np.vstack(xt_dist)
+                if 'objects_semantics' in self.observations['low_dim']:
+                    obs['objects_semantics'] = np.vstack(semantics + semantics_dist)
+            else:
+                obs['objects_state'] = np.stack(xt_stack+xt_dist, axis=0)
+                if 'objects_semantics' in self.observations['low_dim']:
+                    obs['objects_semantics'] = np.vstack(semantics + semantics_stack + semantics_dist)
+
 
         if 'rgb_front_cam' in self.observations['rgb']:
             obs['rgb_front_cam'] = self.get_current_image(self.front_cam_name)
@@ -869,7 +898,7 @@ class SlidePickupClutterMujocoMultimodalEnv(gym.Env, EzPickle):
     def get_action(self):
         action = np.zeros(3)
         if self.suction_gripper_active:
-            action[:3] = [-0.4, 0, 0.1]
+            action[:3] = [-0.4, 0, 0.001]
             # target_pos = [0., 0.3, 0.1]
             # action[:3] = target_pos - self.ee_pos
         else:
@@ -1167,6 +1196,7 @@ class SlidePickupClutterMujocoMultimodalEnv(gym.Env, EzPickle):
 
     def plot_trajectory(self, state, action, save_filename):
         """ 
+            state_dict: list of dicts
             state shape = (T+1, self.n)
             action shape = (T, self.m)
         """
@@ -1174,43 +1204,58 @@ class SlidePickupClutterMujocoMultimodalEnv(gym.Env, EzPickle):
         _rows = 4 if self.use_constraint_types else 3
         fig, axes = plt.subplots(_rows, 3, figsize=(16, 16))
 
+        
+        ee_state = np.stack([s['robot_state'][:6] for s in state], axis=0)
+        if self.append_stack_to_robot_state:
+            block_bottom_state = np.stack([s['robot_state'][self.low_dim_sizes['robot0']:self.low_dim_sizes['robot0']+self.low_dim_sizes['objects']] for s in state], axis=0)
+            block_top_state = np.stack([s['robot_state'][self.low_dim_sizes['robot0']+self.low_dim_sizes['objects']:self.low_dim_sizes['robot0']+2*self.low_dim_sizes['objects']] for s in state], axis=0)
+        else:
+            block_bottom_state = np.stack([s['objects_state'][0] for s in state], axis=0)
+            block_top_state = np.stack([s['objects_state'][1] for s in state], axis=0)
+        
         # plot position
-        axes[0,0].plot(state[:,0], label='EE x')
-        axes[0,0].plot(state[:,6], label='Bottom block x')
-        axes[0,0].plot(state[:,12], label='Top block x')
+        axes[0,0].plot(ee_state[:,0], label='EE x')
+        axes[0,0].plot(block_bottom_state[:,0], label='Bottom block x')
+        axes[0,0].plot(block_top_state[:,0], label='Top block x')
 
-        axes[0,1].plot(state[:,1], label='EE y')
-        axes[0,1].plot(state[:,7], label='Bottom block y')
-        axes[0,1].plot(state[:,13], label='Top block y')
+        axes[0,1].plot(ee_state[:,1], label='EE y')
+        axes[0,1].plot(block_bottom_state[:,1], label='Bottom block y')
+        axes[0,1].plot(block_top_state[:,1], label='Top block y')
 
-        axes[0,2].plot(state[:,2], label='EE z')
-        axes[0,2].plot(state[:,8], label='Bottom block z')
-        axes[0,2].plot(state[:,14], label='Top block z')
+        axes[0,2].plot(ee_state[:,2], label='EE z')
+        axes[0,2].plot(block_bottom_state[:,2], label='Bottom block z')
+        axes[0,2].plot(block_top_state[:,2], label='Top block z')
 
         # plot velocity
-        axes[1,0].plot(state[:,3], label='EE x vel')
-        axes[1,0].plot(state[:,9], label='Bottom block x vel')
-        axes[1,0].plot(state[:,15], label='Top block x vel')
+        axes[1,0].plot(ee_state[:,3], label='EE x vel')
+        axes[1,0].plot(block_bottom_state[:,3], label='Bottom block x vel')
+        axes[1,0].plot(block_top_state[:,3], label='Top block x vel')
 
-        axes[1,1].plot(state[:,4], label='EE y vel')
-        axes[1,1].plot(state[:,10], label='Bottom block y vel')
-        axes[1,1].plot(state[:,16], label='Top block y vel')
+        axes[1,1].plot(ee_state[:,4], label='EE y vel')
+        axes[1,1].plot(block_bottom_state[:,4], label='Bottom block y vel')
+        axes[1,1].plot(block_top_state[:,4], label='Top block y vel')
 
-        axes[1,2].plot(state[:,5], label='EE z vel')
-        axes[1,2].plot(state[:,11], label='Bottom block z vel')
-        axes[1,2].plot(state[:,17], label='Top block z vel')
+        axes[1,2].plot(ee_state[:,5], label='EE z vel')
+        axes[1,2].plot(block_bottom_state[:,5], label='Bottom block z vel')
+        axes[1,2].plot(block_top_state[:,5], label='Top block z vel')
 
         for i in range(self.env_cfg.n_rel_objs):
-            axes[0,0].plot(state[:,18+self.low_dim_sizes['objects']*i], label=f'{self.rel_obj_names[i]} x')
-            axes[0,1].plot(state[:,18+self.low_dim_sizes['objects']*i+1], label=f'{self.rel_obj_names[i]} y')
-            axes[0,2].plot(state[:,18+self.low_dim_sizes['objects']*i+2], label=f'{self.rel_obj_names[i]} z')
 
-            axes[1,0].plot(state[:,18+self.low_dim_sizes['objects']*i+3], label=f'{self.rel_obj_names[i]} x vel')
-            axes[1,1].plot(state[:,18+self.low_dim_sizes['objects']*i+4], label=f'{self.rel_obj_names[i]} y vel')
-            axes[1,2].plot(state[:,18+self.low_dim_sizes['objects']*i+5], label=f'{self.rel_obj_names[i]} z vel')
+            if self.append_stack_to_robot_state:
+                block_state = np.stack([s['objects_state'][i] for s in state], axis=0)            
+            else:
+                block_state = np.stack([s['objects_state'][i+2] for s in state], axis=0)
+
+            axes[0,0].plot(block_state[:,0], label=f'{self.rel_obj_names[i]} x')
+            axes[0,1].plot(block_state[:,1], label=f'{self.rel_obj_names[i]} y')
+            axes[0,2].plot(block_state[:,2], label=f'{self.rel_obj_names[i]} z')
+
+            axes[1,0].plot(block_state[:,3], label=f'{self.rel_obj_names[i]} x vel')
+            axes[1,1].plot(block_state[:,4], label=f'{self.rel_obj_names[i]} y vel')
+            axes[1,2].plot(block_state[:,5], label=f'{self.rel_obj_names[i]} z vel')
 
             if self.use_constraint_types:
-                axes[3,0].plot(state[:,18+self.low_dim_sizes['objects']*i+6], label=f'{self.rel_obj_names[i]} x')
+                axes[3,0].plot(block_state[:,6], label=f'{self.rel_obj_names[i]} x')
 
         # control on bottom block
         axes[2,0].plot(action[:,0], label='u_x')
@@ -1361,7 +1406,7 @@ if __name__ == "__main__":
     import imageio
     from PIL import Image
 
-    out_folder = '/home/saumyas/Projects/safe_control/safety_rl_manip/outputs/media/slide_pickup_clutter/'
+    out_folder = '/home/saumyas/Projects/safe_control/safety_rl_manip/outputs/media/slide_pickup_clutter_multimodal/'
     env_cfg = OmegaConf.load('/home/saumyas/Projects/safe_control/safety_rl_manip/cfg/envs/mujoco_envs.yaml')
 
     env_name = "slide_pickup_clutter_mujoco_multimodal_env-v0"
@@ -1377,7 +1422,6 @@ if __name__ == "__main__":
         print(f'episode:{i}')
         xt_all, at_all, imgs = [], [], []
         xt = env.reset()
-        import ipdb; ipdb.set_trace()
         xt_all.append(xt)
         
         done = False
@@ -1385,9 +1429,10 @@ if __name__ == "__main__":
         action = down_action.copy()
         while not (done or ep_len == max_ep_len):
         # while not (ep_len == max_ep_len):
-            at = env.action_space.sample()
+            # at = env.action_space.sample()
+            at = env.get_action()
             at_all.append(at)
-            xt, _, done, _ = env.step(env.get_action())
+            xt, _, done, _ = env.step(at)
 
             xt_all.append(xt)
 
@@ -1404,4 +1449,4 @@ if __name__ == "__main__":
         if save_gif:
             file_name = f'test_slide_pickup_clutter_all_up_{i}_{env.failure_mode}_{env.colliding_obj_name}'
             imageio.mimsave(out_folder+f'{file_name}.gif', imgs[::4], duration=100)
-            env.plot_trajectory(np.stack(xt_all,axis=0), np.stack(at_all,axis=0), os.path.join(out_folder, f'{file_name}.png'))
+            env.plot_trajectory(xt_all, np.stack(at_all,axis=0), os.path.join(out_folder, f'{file_name}.png'))

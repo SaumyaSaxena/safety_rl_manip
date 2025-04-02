@@ -243,7 +243,7 @@ class DDPGMultimodal(torch.nn.Module):
         }
         loss_q, loss_info = self.compute_loss_q(data, outputs)
         loss_q.backward(retain_graph=True)
-        torch.nn.utils.clip_grad_value_(self.ac.parameters(), self.train_cfg.optimizer.clip_grad_norm)
+        torch.nn.utils.clip_grad_norm_(self.ac.parameters(), self.train_cfg.optimizer.clip_grad_norm)
 
         for p in self.ac.get_q_parameters():
             p.requires_grad = False
@@ -252,7 +252,7 @@ class DDPGMultimodal(torch.nn.Module):
         loss_pi = self.compute_loss_pi(data, outputs)
         # loss_pi.retain_grad() # for checking gradients
         loss_pi.backward()
-        torch.nn.utils.clip_grad_value_(self.ac.parameters(), self.train_cfg.optimizer.clip_grad_norm)
+        torch.nn.utils.clip_grad_norm_(self.ac.parameters(), self.train_cfg.optimizer.clip_grad_norm)
         for p in self.ac.get_q_parameters():
             p.requires_grad = True
 
@@ -266,7 +266,7 @@ class DDPGMultimodal(torch.nn.Module):
 
         # # start = time.time()
         # loss_q.backward(retain_graph=True)
-        # torch.nn.utils.clip_grad_value_(self.ac.parameters(), self.train_cfg.optimizer.clip_grad_norm)
+        # torch.nn.utils.clip_grad_norm_(self.ac.parameters(), self.train_cfg.optimizer.clip_grad_norm)
         # # print(f'Time for backward pass q = {time.time()-start}')
 
         # for p in self.ac.get_q_parameters():
@@ -278,7 +278,7 @@ class DDPGMultimodal(torch.nn.Module):
 
         # # start = time.time()
         # loss_pi.backward()
-        # torch.nn.utils.clip_grad_value_(self.ac.parameters(), self.train_cfg.optimizer.clip_grad_norm)
+        # torch.nn.utils.clip_grad_norm_(self.ac.parameters(), self.train_cfg.optimizer.clip_grad_norm)
         # # print(f'Time for backward pass pi = {time.time()-start}')
 
         # for p in self.ac.get_q_parameters():

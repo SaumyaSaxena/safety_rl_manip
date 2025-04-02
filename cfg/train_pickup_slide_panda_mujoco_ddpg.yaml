@@ -5,7 +5,7 @@ tag: ${now:%Y-%m-%d-%H-%M-%S}
 run_name: "train_panda_DDPG_pickup_slide_mujoco_${train_cfg.mode}" 
 # variant: ${train_cfg.warmup_cfg.warmup_type}_UpdatePiType_${train_cfg.warmup_cfg.warmupQ_expert.update_pi_type}
 # variant: 'no_terminal_gammaSch150_lrSch'
-variant: 'test3obj'
+variant: '3obj'
 
 hydra:
   run:

@@ -179,7 +179,7 @@ class SACMultimodal(torch.nn.Module):
         }
         loss_q, loss_info = self.compute_loss_q(data, outputs)
         loss_q.backward(retain_graph=True)
-        torch.nn.utils.clip_grad_value_(self.ac.parameters(), self.train_cfg.optimizer.clip_grad_norm)
+        torch.nn.utils.clip_grad_norm_(self.ac.parameters(), self.train_cfg.optimizer.clip_grad_norm)
 
         self.ac.freeze_q_params()
         q1_policy, q2_policy = self.ac.forward_value(transformer_outputs, action_pred[:,:,0,:], train=True) # TODO: considering the action at current time step
@@ -188,7 +188,7 @@ class SACMultimodal(torch.nn.Module):
         loss_pi = self.compute_loss_pi(data, outputs)
         # loss_pi.retain_grad() # for checking gradients
         loss_pi.backward()
-        torch.nn.utils.clip_grad_value_(self.ac.parameters(), self.train_cfg.optimizer.clip_grad_norm)
+        torch.nn.utils.clip_grad_norm_(self.ac.parameters(), self.train_cfg.optimizer.clip_grad_norm)
         self.ac.unfreeze_q_params()
         # Debug end
         
@@ -200,7 +200,7 @@ class SACMultimodal(torch.nn.Module):
 
         # # start = time.time()
         # loss_q.backward(retain_graph=True)
-        # torch.nn.utils.clip_grad_value_(self.ac.parameters(), self.train_cfg.optimizer.clip_grad_norm)
+        # torch.nn.utils.clip_grad_norm_(self.ac.parameters(), self.train_cfg.optimizer.clip_grad_norm)
         # # print(f'Time for backward pass q = {time.time()-start}')
 
         # self.ac.freeze_q_params()
@@ -211,7 +211,7 @@ class SACMultimodal(torch.nn.Module):
 
         # # start = time.time()
         # loss_pi.backward()
-        # torch.nn.utils.clip_grad_value_(self.ac.parameters(), self.train_cfg.optimizer.clip_grad_norm)
+        # torch.nn.utils.clip_grad_norm_(self.ac.parameters(), self.train_cfg.optimizer.clip_grad_norm)
         # # print(f'Time for backward pass pi = {time.time()-start}')
 
         # self.ac.unfreeze_q_params()

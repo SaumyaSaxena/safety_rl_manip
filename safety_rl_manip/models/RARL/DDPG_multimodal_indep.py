@@ -218,8 +218,7 @@ class DDPGMultimodalIndep(torch.nn.Module):
         loss_q = self.train_cfg.scale_q_loss * ((q - backup)**2).mean()
 
         # Useful info for logging
-        loss_info = dict(QVals=q.detach().cpu().numpy())
-
+        loss_info = dict(QVals=q.mean().detach().cpu().numpy(), QTarg=backup.mean().detach().cpu().numpy())
         return loss_q, loss_info
 
     # Set up function for computing DDPG pi loss
@@ -233,7 +232,7 @@ class DDPGMultimodalIndep(torch.nn.Module):
         self.ac.q_optimizer.zero_grad()
         loss_q, loss_info = self.compute_loss_q(data)
         loss_q.backward()
-        torch.nn.utils.clip_grad_value_(self.ac.parameters(), self.train_cfg.optimizer.clip_grad_norm)
+        torch.nn.utils.clip_grad_norm_(self.ac.parameters(), self.train_cfg.optimizer.clip_grad_norm)
         self.ac.q_optimizer.step()
         self.ac.q_scheduler.step(epoch)
 
@@ -246,7 +245,7 @@ class DDPGMultimodalIndep(torch.nn.Module):
         self.ac.pi_optimizer.zero_grad()
         loss_pi = self.compute_loss_pi(data)
         loss_pi.backward()
-        torch.nn.utils.clip_grad_value_(self.ac.parameters(), self.train_cfg.optimizer.clip_grad_norm)
+        torch.nn.utils.clip_grad_norm_(self.ac.parameters(), self.train_cfg.optimizer.clip_grad_norm)
         self.ac.pi_optimizer.step()
         self.ac.pi_scheduler.step(epoch)
 
@@ -264,6 +263,11 @@ class DDPGMultimodalIndep(torch.nn.Module):
                 p_targ.data.add_((1 - self.polyak) * p.data)
         # print(f'Time for polyak averaging = {time.time()-start}')
 
+        actor_grad_norm = torch.cat([p.grad.view(-1) for p in self.ac.get_pi_parameters() if p.grad is not None]).norm().item()
+        critic_grad_norm = torch.cat([p.grad.view(-1) for p in self.ac.get_q_parameters() if p.grad is not None]).norm().item()
+
+        loss_info.update({f'actor_grad_norm': actor_grad_norm})
+        loss_info.update({f'critic_grad_norm': critic_grad_norm})
         return loss_q.item(), loss_pi.item(), loss_info
 
     def get_action(self, o, noise_scale):
@@ -370,6 +374,7 @@ class DDPGMultimodalIndep(torch.nn.Module):
         epoch=0
         for t in trange(start_step, total_steps):
             # torch.cuda.empty_cache()
+            # start = time.time()
             self.env.epoch = epoch
             self.test_env.epoch = epoch
 
@@ -385,6 +390,7 @@ class DDPGMultimodalIndep(torch.nn.Module):
                 a = self.env.action_space.sample()
 
             # Step the env
+            
             o2, r, d, info = self.env.step(a)
             ep_ret += r
             ep_len += 1
@@ -401,6 +407,8 @@ class DDPGMultimodalIndep(torch.nn.Module):
             # most recent observation!
             o = o2
 
+            # print(f'time for step {t} = {time.time()-start}')
+
             # End of trajectory handling
             if d or (ep_len == self.max_ep_len):
                 ep_num += 1
@@ -409,7 +417,7 @@ class DDPGMultimodalIndep(torch.nn.Module):
                     log_dict.update({f'Episode length': ep_len})
                     log_dict.update({f'Num episodes': ep_num})
                 o, ep_ret, ep_len = self.env.reset(), 0, 0
-
+            
             # Update handling
             if t >= self.update_after and t % self.update_every == 0:
                 for _ in range(self.update_steps):
@@ -419,7 +427,8 @@ class DDPGMultimodalIndep(torch.nn.Module):
                         log_dict.update({f'loss_q': loss_q})
                         log_dict.update({f'loss_pi': loss_pi})
                         log_dict.update(loss_info)
-                
+            
+            
             # End of epoch handling
             if (t+1-start_step) % self.steps_per_epoch == 0:
                 epoch = (t+1-start_step) // self.steps_per_epoch
@@ -475,6 +484,7 @@ class DDPGMultimodalIndep(torch.nn.Module):
                         log_dict.update(test_info)
             if not self.debug:
                 wandb.log(log_dict, step=t)
+            
                     
         # Eval best checkpoint so far
         ckpt = torch.load(self.topk_logger.best_ckpt(), map_location=self.device)

@@ -418,8 +418,7 @@ class DDPG(torch.nn.Module):
         # MSE loss against Bellman backup
         loss_q = self.train_cfg.scale_q_loss * ((q - backup)**2).mean()
         # Useful info for logging
-        loss_info = dict(QVals=q.detach().cpu().numpy())
-
+        loss_info = dict(QVals=q.mean().detach().cpu().numpy(), QTarg=backup.mean().detach().cpu().numpy())
         return loss_q, loss_info
 
     # Set up function for computing DDPG pi loss
@@ -459,6 +458,13 @@ class DDPG(torch.nn.Module):
                 # params, as opposed to "mul" and "add", which would make new tensors.
                 p_targ.data.mul_(self.polyak)
                 p_targ.data.add_((1 - self.polyak) * p.data)
+        
+        actor_grad_norm = torch.cat([p.grad.view(-1) for p in self.ac.pi.parameters() if p.grad is not None]).norm().item()
+        critic_grad_norm = torch.cat([p.grad.view(-1) for p in self.ac.q.parameters() if p.grad is not None]).norm().item()
+
+        loss_info.update({f'actor_grad_norm': actor_grad_norm})
+        loss_info.update({f'critic_grad_norm': critic_grad_norm})
+
         return loss_q.item(), loss_pi.item(), loss_info
 
     def get_action(self, o, noise_scale):

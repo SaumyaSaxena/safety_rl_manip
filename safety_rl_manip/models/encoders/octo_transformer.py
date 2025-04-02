@@ -242,9 +242,9 @@ class OctoTransformer(nn.Module):
             # obs_tokens shape is (batch, horizon, n_tokens, token_embedding_size)
 
             # # Add positional embedding # TODO: remove hardcoded
-            # embedding = self.observation_pos_emb[i](torch.arange(tok.num_tokens*horizon).to(self.device)) # Use only the timesteps we receive as input
-            # embedding = embedding.reshape(1, *obs_tokens.shape[1:])
-            # obs_tokens += torch.broadcast_to(embedding, obs_tokens.shape)
+            embedding = self.observation_pos_emb[i](torch.arange(tok.num_tokens*horizon).to(self.device)) # Use only the timesteps we receive as input
+            embedding = embedding.reshape(1, *obs_tokens.shape[1:])
+            obs_tokens += torch.broadcast_to(embedding, obs_tokens.shape)
 
             # Update mask to account for which timesteps are padding
             obs_pad_mask = torch.logical_and(pad_mask[:, :, None], tokenizer_output.mask)

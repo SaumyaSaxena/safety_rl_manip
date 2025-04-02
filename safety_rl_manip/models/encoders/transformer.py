@@ -27,7 +27,48 @@ class FF_MLP(nn.Module):
 
     def forward(self, x):
         return self.fc2(self.activation(self.fc1(x)))
-    
+
+class SinusoidalPositionalEncoding(nn.Module):
+    """
+    Taken from https://pytorch.org/tutorials/beginner/transformer_tutorial.html.
+    """
+
+    def __init__(self, embed_dim):
+        """
+        Standard sinusoidal positional encoding scheme in transformers.
+
+        Positional encoding of the k'th position in the sequence is given by:
+            p(k, 2i) = sin(k/n^(i/d))
+            p(k, 2i+1) = sin(k/n^(i/d))
+
+        n: set to 10K in original Transformer paper
+        d: the embedding dimension
+        i: positions along the projected embedding space (ranges from 0 to d/2)
+
+        Args:
+            embed_dim: The number of dimensions to project the timesteps into.
+        """
+        super().__init__()
+        self.embed_dim = embed_dim
+
+    def forward(self, x):
+        """
+        Input timestep of shape (T,)
+        """
+        position = x
+        # computing 1/n^(i/d) in log space and then exponentiating and fixing the shape
+        div_term = (
+            torch.exp(
+                torch.arange(0, self.embed_dim, 2, device=x.device)
+                * (-math.log(10000.0) / self.embed_dim)
+            )
+            .unsqueeze(0)
+            .repeat(x.shape[0], 1)
+        ) # T x embed_dim/2
+        pe = torch.zeros((x.shape[0], self.embed_dim), device=x.device)
+        pe[:, 0::2] = torch.sin(position.unsqueeze(-1) * div_term)
+        pe[:, 1::2] = torch.cos(position.unsqueeze(-1) * div_term)
+        return pe.detach()
 
 class AddPositionEmbs(nn.Module):
     """Adds learned positional embeddings to the inputs."""
@@ -230,7 +271,7 @@ class CausalSelfAttention(nn.Module):
         if self.nets["output"].bias is not None:
             nn.init.normal_(self.nets["output"].bias)
 
-    def forward(self, x):
+    def forward(self, x, mask=None):
         """
         Forward pass through Self-Attention block.
         Input should be shape (B, T, D) where B is batch size, T is seq length (@self.context_length), and
@@ -266,13 +307,13 @@ class CausalSelfAttention(nn.Module):
         # mask = torch.ones(T, T)
         # mask[:, -2:] = 0
         # mask[-2:, -2:] = torch.eye(2)
-        # mask = mask.view(1,1,T,T).to(self.device)
-        # att = att.masked_fill(mask[..., :T, :T] == 0, float("-inf"))
+        if mask is not None:
+            mask = mask.view(1,1,T,T).to(self.device)
+            att = att.masked_fill(mask[..., :T, :T] == 0, float("-inf"))
 
         att = F.softmax(
             att, dim=-1
         )  # shape [B, NH, T, T], last dimension has score over all T for each sequence member
-
         # dropout on attention
         # att = self.nets["attn_dropout"](att)
 
@@ -474,7 +515,7 @@ class Encoder1DBlock(nn.Module):
         x = self.layer_norm1(inputs)
 
         if self.use_rs_attn:
-            x = self.multihead_attention(x)
+            x = self.multihead_attention(x, attention_mask)
         else:
             x, attn_weights = self.multihead_attention(x, x, x, attn_mask=attention_mask)
 
@@ -526,9 +567,8 @@ class AdaLNBlock(nn.Module):
 
     def forward(self, x, cond, attn_mask=None):
         shift_msa, scale_msa, gate_msa, shift_mlp, scale_mlp, gate_mlp = self.adaLN_modulation(cond).chunk(6, dim=2)
-        import ipdb; ipdb.set_trace()
         moduln = modulate(self.layer_norm1(x), shift_msa, scale_msa)
-        x = x + gate_msa * self.multihead_attention(moduln, moduln, moduln)
+        x = x + gate_msa * self.multihead_attention(moduln)
         x = x + gate_mlp * self.mlp(modulate(self.layer_norm2(x), shift_mlp, scale_mlp))
         return x
 
@@ -574,6 +614,7 @@ class CrossAttentionBlock(nn.Module):
         self.dropout = nn.Dropout(dropout_rate)
 
         self.layer_norm2 = nn.LayerNorm(token_embedding_size)
+        self.layer_norm3 = nn.LayerNorm(token_embedding_size)
         self.mlp_block = MlpBlock(mlp_dim=mlp_dim, out_dim=token_embedding_size, dropout_rate=dropout_rate, device=device)
 
     def forward(self, inputs, cond, attn_mask=None):
@@ -593,13 +634,15 @@ class CrossAttentionBlock(nn.Module):
 
         x = self.multihead_self_attention(x)
 
+        x = self.layer_norm2(x)
+
         x = self.cross_attention(x, cond)
 
         x = self.dropout(x)
         x = x + inputs
 
         # MLP block.
-        y = self.layer_norm2(x)
+        y = self.layer_norm3(x)
         y = self.mlp_block(y)
 
         return x + y

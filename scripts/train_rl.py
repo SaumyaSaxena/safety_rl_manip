@@ -14,6 +14,7 @@ from safety_rl_manip.models.RARL.DDPG_multimodal import DDPGMultimodal
 from safety_rl_manip.models.RARL.DDPG_multimodal_indep import DDPGMultimodalIndep
 from safety_rl_manip.models.RARL.SAC_multimodal import SACMultimodal
 from safety_rl_manip.models.RARL.SAC_multimodal_indep import SACMultimodalIndep
+from safety_rl_manip.models.RARL.TD3_multimodal_indep import TD3MultimodalIndep
 from safety_rl_manip.models.RARL.DDPG_switching import DDPGSwitching
 from safety_rl_manip.models.RARL.SAC import SAC
 
@@ -29,6 +30,8 @@ logger = logging.getLogger(__name__)
 # @hydra.main(config_path='../cfg/', config_name='train_pickup_slide_panda_mujoco_ddpg_indep_adaln_mulitmodal_low_dim.yaml')
 # @hydra.main(config_path='../cfg/', config_name='train_pickup_slide_panda_mujoco_ddpg_indep_mulitmodal_low_dim.yaml')
 @hydra.main(config_path='../cfg/', config_name='train_pickup_slide_ddpg_IndepAttn_basic_low_dim.yaml')
+# @hydra.main(config_path='../cfg/', config_name='train_pickup_slide_SAC_IndepAttn_basic_low_dim.yaml')
+# @hydra.main(config_path='../cfg/', config_name='train_pickup_slide_TD3_IndepAttn_basic_low_dim.yaml')
 # @hydra.main(config_path='../cfg/', config_name='train_point_mass_2D_obstacles_switching.yaml')
 # @hydra.main(config_path='../cfg/', config_name='train_point_mass_cont_ddpg.yaml')
 # @hydra.main(config_path='../cfg/', config_name='train_point_mass_cont_sac.yaml')

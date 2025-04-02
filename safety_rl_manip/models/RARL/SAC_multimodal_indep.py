@@ -6,7 +6,9 @@ from torch.optim import AdamW
 import gym
 import time
 import json
-from .SAC_core import SACTransformerActorCritic, SACTransformerIndepActorCritic
+from .SAC_core import SACTransformerActorCritic, SACTransformerIndepActorCritic, SACTransformerIndepActorCriticSS
+from .TD3_core import TD3TransformerIndepActorCriticSS
+
 import wandb
 from tqdm import trange
 from .utils import calc_false_pos_neg_rate, TopKLogger, ReplayBufferMultimodal, set_seed
@@ -146,15 +148,16 @@ class SACMultimodalIndep(torch.nn.Module):
         loss_q = loss_q1 + loss_q2
 
         # Useful info for logging
-        loss_info = dict(Q1Vals=q1.detach().cpu().numpy(),
-                        Q2Vals=q2.detach().cpu().numpy())
+        loss_info = dict(Q1Vals=q1.mean().detach().cpu().numpy(),
+                        Q2Vals=q2.mean().detach().cpu().numpy(),
+                        QTarg=backup.mean().detach().cpu().numpy())
 
         return loss_q, loss_info
 
     # Set up function for computing DDPG pi loss
     def compute_loss_pi(self, data):
         o = data['obs']
-        outputs = self.ac.value()
+        outputs = self.ac.value(o)
         q_pi = torch.min(outputs['q1_policy'], outputs['q2_policy'])
 
         # Entropy-regularized policy loss
@@ -162,13 +165,13 @@ class SACMultimodalIndep(torch.nn.Module):
 
         return loss_pi
     
-    def update(self, data, epoch):
+    def update(self, data, epoch, timer):
         # First run one gradient descent step for Q.
 
         self.ac.q_optimizer.zero_grad()        
         loss_q, loss_info = self.compute_loss_q(data)
         loss_q.backward()
-        torch.nn.utils.clip_grad_value_(self.ac.parameters(), self.train_cfg.optimizer.clip_grad_norm)
+        torch.nn.utils.clip_grad_norm_(self.ac.parameters(), self.train_cfg.optimizer.clip_grad_norm)
         self.ac.q_optimizer.step()
         self.ac.q_scheduler.step(epoch)
         
@@ -177,7 +180,7 @@ class SACMultimodalIndep(torch.nn.Module):
         self.ac.pi_optimizer.zero_grad()
         loss_pi = self.compute_loss_pi(data)
         loss_pi.backward()
-        torch.nn.utils.clip_grad_value_(self.ac.parameters(), self.train_cfg.optimizer.clip_grad_norm)
+        torch.nn.utils.clip_grad_norm_(self.ac.parameters(), self.train_cfg.optimizer.clip_grad_norm)
         self.ac.pi_optimizer.step()
         self.ac.pi_scheduler.step(epoch)
         
@@ -338,12 +341,13 @@ class SACMultimodalIndep(torch.nn.Module):
 
             # Update handling
             if t >= self.update_after and t % self.update_every == 0:
-                for _ in range(self.update_steps):
+                for _timer in range(self.update_steps):
                     batch = self.replay_buffer.sample_batch(self.batch_size)
-                    loss_q, loss_pi, loss_info = self.update(batch, epoch)
+                    loss_q, loss_pi, loss_info = self.update(batch, epoch, _timer)
                     if not self.debug:
                         log_dict.update({f'loss_q': loss_q})
-                        log_dict.update({f'loss_pi': loss_pi})
+                        if loss_pi is not None:
+                            log_dict.update({f'loss_pi': loss_pi})
                         log_dict.update(loss_info)
                 
             # End of epoch handling
@@ -382,7 +386,8 @@ class SACMultimodalIndep(torch.nn.Module):
                                 "env_name": self.env_name,
                                 "train_cfg": self.train_cfg,
                                 "env_cfg": self.env_cfg,
-                                "optimizer_state": self.ac.optimizer.state_dict(),
+                                "q_optimizer_state": self.ac.q_optimizer.state_dict(),
+                                "pi_optimizer_state": self.ac.pi_optimizer.state_dict(),
                                 "epoch": epoch,
                             },
                             f=save_file_name,
@@ -395,7 +400,8 @@ class SACMultimodalIndep(torch.nn.Module):
                         log_dict.update({f'gamma': self.gamma})
                         log_dict.update({f'act_noise': self.act_noise})
                         log_dict.update({f'Time': time.time()-start_time})
-                        log_dict.update({'optim/lr': self.ac.optimizer.param_groups[0]['lr']})
+                        log_dict.update({'optim/q_lr': self.ac.q_optimizer.param_groups[0]['lr']})
+                        log_dict.update({'optim/pi_lr': self.ac.pi_optimizer.param_groups[0]['lr']})
                         log_dict.update(test_info)
             if not self.debug:
                 wandb.log(log_dict, step=t)
@@ -439,7 +445,7 @@ class SACMultimodalIndep(torch.nn.Module):
             #     self.ac_targ.pi(torch.from_numpy(o).float().to(self.device))).detach().cpu().numpy()
             # pred_success = pred_v > 0.
 
-            pred_success = outputs['q_policy'].detach().cpu().numpy() > 0.
+            pred_success = outputs['q1_policy'].detach().cpu().numpy() > 0.
 
             gt_success = False
 

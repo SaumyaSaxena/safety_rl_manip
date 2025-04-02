@@ -2,10 +2,10 @@ debug: False
 gpu: 1
 seed: 0
 tag: ${now:%Y-%m-%d-%H-%M-%S}
-run_name: "train_SS_DDPG_SA_indep_${train_cfg.mode}" 
+run_name: "trainSS_TD3_SA_indep_${train_cfg.mode}" 
 # variant: ${train_cfg.warmup_cfg.warmup_type}_UpdatePiType_${train_cfg.warmup_cfg.warmupQ_expert.update_pi_type}
 # variant: 'no_terminal_gammaSch150_lrSch'
-variant: 'noise02_PosEmb_64_ALLlr1e4_StackTrue_scaleQ_noDropout_int_3obj'
+variant: 'NoStack_scalingRew10_ClipGradNorm5_NoDropout_int_dense2_3obj'
 
 hydra:
   run:
@@ -33,20 +33,22 @@ envs:
     costType: 'max_ell_g'
     epochs: ${train_cfg.epochs}
     constraint_type_repr: 'int'
+    scaling_target: 1.0
+    scaling_safety: 1.0
     observations:
       low_dim: ['robot_state', 'objects_state']
       rgb: [] # ['rgb_front_cam','rgb_eye_in_hand_cam']
-      append_stack_to_robot_state: True
+      append_stack_to_robot_state: False
 
 train_cfg:
   run_variant: ${variant}
-  algo_name: DDPGMultimodalIndep
+  algo_name: TD3MultimodalIndep
   warmup: False
   warmup_cfg:
     batch_size: 200
     num_epochs: 60
-    warmup_q_lr: 1e-3
-    warmup_pi_lr: 1e-3
+    warmup_q_lr: 1e-4
+    warmup_pi_lr: 1e-4
     warmup_type: 'warmup_pi' # 'warmupQ_terminal_all_states', 'warmupQ_expert', 'warmup_pi'
     warmupQ_terminal_all_states:
       num_terminal_samples: 1e+4
@@ -66,34 +68,24 @@ train_cfg:
   epochs: 1200
   replay_size: 1e+6
   gamma: 0.99
+  alpha: 0.2
   schedule_gamma: False
   gamma_warmup_epochs: 150
   scale_q_loss: 1000.0
   polyak: 0.995
   optimizer:
-    pi_lr: 1e-4
-    q_lr: 1e-4
+    pi_lr: 1e-3
+    q_lr: 1e-3
     clip_grad_norm: 5.0
     AdamW:
       eps: 1.0e-8
       weight_decay: 0.01
-    pi_scheduler:
+    scheduler:
       sched: cosine
       # epochs are updated in code: epochs <- total_epochs - warmup - cooldown
       epochs: ${train_cfg.epochs}  # Total epochs to run (warmup + decay + cooldown)
       min_lr: 1.0e-5
-      warmup_lr: 5e-5
-      warmup_epochs: 10
-      cooldown_epochs: 0
-      warmup_restarts: False
-      T_0: 10
-      T_mult: 2
-    q_scheduler:
-      sched: cosine
-      # epochs are updated in code: epochs <- total_epochs - warmup - cooldown
-      epochs: ${train_cfg.epochs}  # Total epochs to run (warmup + decay + cooldown)
-      min_lr: 1.0e-5
-      warmup_lr: 5e-5
+      warmup_lr: 5.0e-5
       warmup_epochs: 10
       cooldown_epochs: 0
       warmup_restarts: False
@@ -104,7 +96,10 @@ train_cfg:
   update_after: 1000 # 1000
   update_steps: 50 # 50
   update_every: 50 # 50
-  act_noise: 0.2
+  act_noise: 0.1
+  target_noise: 0.2
+  noise_clip: 0.5
+  policy_delay: 2
   schedule_noise: False
   noise_decay: 0.985
   num_test_episodes: 20
@@ -112,14 +107,14 @@ train_cfg:
   model_save_freq: 2
   plot_save_freq: 10
   save_top_k: 5
-  ac_type: TransformerIndepActorCriticSS # 'MLPActorCritic', 'TransformerIndepActorCriticSS'
+  ac_type: TD3TransformerIndepActorCriticSS # 'MLPActorCritic', 'TD3TransformerIndepActorCriticSS'
   ac_kwargs:
-    TransformerIndepActorCriticSS:
+    TD3TransformerIndepActorCriticSS:
       token_embedding_size: 128
       pred_horizon: 1
       window_size: 1
       q_action_condn_type: 'early_late' # 'early', 'late', 'early_late' # action tokenizer is used only if this is 'early'
-      position_embedding_type: 'sinusoidal' # 'sinusoidal', 'parameter', 'embedding', None
+      position_embedding_type: 'None' # 'sinusoidal', 'parameter', 'embedding', None
       observation_tokenizers:
         image_primary:
           kwargs:
@@ -142,18 +137,18 @@ train_cfg:
         low_dim_primary:
           kwargs:
             obs_stack_keys: ['robot_state'] # all keys should have same shape
-            hidden_sizes: [64,64]
+            hidden_sizes: [128,128]
           name: IdentityLowdimObsTokenizer
         low_dim_secondary:
           kwargs:
             obs_stack_keys: ['objects_state'] # all keys should have same shape
-            hidden_sizes: [64,64]
+            hidden_sizes: [128,128]
           name: IdentityLowdimObsTokenizer
       action_tokenizers:
         low_dim_action:
           kwargs:
             obs_stack_keys: ['action'] # all keys should have same shape
-            hidden_sizes: [64,64]
+            hidden_sizes: [128,128]
           name: IdentityLowdimObsTokenizer
       readouts_actor:
         action: 1
@@ -163,19 +158,19 @@ train_cfg:
         action:
           args: []
           kwargs:
-            pred_horizon: ${train_cfg.ac_kwargs.TransformerIndepActorCriticSS.pred_horizon}
+            pred_horizon: ${train_cfg.ac_kwargs.TD3TransformerIndepActorCriticSS.pred_horizon}
             readout_key: readout_action # is always "readout_{head_name}" where here head_name = action
-            hidden_sizes: [64,64]
+            hidden_sizes: [128,128]
             use_map: false
-            embedding_size: ${train_cfg.ac_kwargs.TransformerIndepActorCriticSS.token_embedding_size}
+            embedding_size: ${train_cfg.ac_kwargs.TD3TransformerIndepActorCriticSS.token_embedding_size}
             loss_type: 'mse' # 'l1', 'softmax_cross_ent', 'mse'
           name: ContinuousActionHead
         value:
           args: []
           kwargs:
-            pred_horizon: ${train_cfg.ac_kwargs.TransformerIndepActorCriticSS.pred_horizon}
+            pred_horizon: ${train_cfg.ac_kwargs.TD3TransformerIndepActorCriticSS.pred_horizon}
             readout_key: readout_value # is always "readout_{head_name}" where here head_name = value
-            hidden_sizes: [64,64]
+            hidden_sizes: [128,128]
             use_map: false
             loss_type: 'mse' # 'l1', 'softmax_cross_ent', 'mse'
           name: ValueHead
@@ -187,8 +182,8 @@ train_cfg:
         mlp_dim: 256 # around 4 times the token_embedding_size
         num_attention_heads: 4 #6
         num_layers: 2 #12
-        window_size: ${train_cfg.ac_kwargs.TransformerIndepActorCriticSS.window_size}
-        token_embedding_size: ${train_cfg.ac_kwargs.TransformerIndepActorCriticSS.token_embedding_size}
+        window_size: ${train_cfg.ac_kwargs.TD3TransformerIndepActorCriticSS.window_size}
+        token_embedding_size: ${train_cfg.ac_kwargs.TD3TransformerIndepActorCriticSS.token_embedding_size}
         attention_type: 'SA' # SA, CA, AdaLN
       pi_transformer_kwargs:
         add_position_embedding: False
@@ -198,8 +193,8 @@ train_cfg:
         mlp_dim: 256 # around 4 times the token_embedding_size
         num_attention_heads: 4 #6
         num_layers: 2 #12
-        window_size: ${train_cfg.ac_kwargs.TransformerIndepActorCriticSS.window_size}
-        token_embedding_size: ${train_cfg.ac_kwargs.TransformerIndepActorCriticSS.token_embedding_size}
+        window_size: ${train_cfg.ac_kwargs.TD3TransformerIndepActorCriticSS.window_size}
+        token_embedding_size: ${train_cfg.ac_kwargs.TD3TransformerIndepActorCriticSS.token_embedding_size}
         attention_type: 'SA' # SA, CA
     MLPActorCritic:
       hidden_sizes: [256,256]

@@ -207,7 +207,8 @@ class ContinuousActionHead(nn.Module):
         sizes = [embedding_size] + list(hidden_sizes) + [action_dim*pred_horizon]
         layers = []
         for j in range(len(sizes)-1):
-            layers.append(nn.Linear(sizes[j], sizes[j+1]))
+            act = nn.SiLU if j < len(sizes)-2 else nn.Tanh
+            layers += [nn.Linear(sizes[j], sizes[j+1]), act()]
         self.mean_proj = nn.Sequential(*layers)
 
     def forward(self, transformer_outputs: Dict[str, TokenGroup], train: bool = True):
@@ -226,14 +227,21 @@ class ContinuousActionHead(nn.Module):
             embeddings = token_group.tokens.mean(axis=-2)
         # Now, embeddings is (batch_size, window_size, embedding_size)
 
-        mean = self.mean_proj(embeddings)
-        mean = rearrange(
-            mean, "b w (p a) -> b w p a", p=self.pred_horizon, a=self.action_dim
-        )
-
-        # mean = torch.tanh(mean / self.max_action) * self.max_action
-        mean = (torch.tanh(mean) + 1) / 2 * (self.max_action - self.min_action) + self.min_action
+        mean = self.forward_emb(embeddings)
+        
         return mean
+
+    def forward_emb(self, inputs):
+        """ 
+            inputs: shape (batch_size, window_size, embedding_size)
+            outputs: shape (batch_size, window_size, pred_horizon, value_dim)
+        """
+        actions = self.mean_proj(inputs)
+        actions = rearrange(
+            actions, "b w (p a) -> b w p a", p=self.pred_horizon, a=self.action_dim
+        )
+        actions = (actions + 1) / 2 * (self.max_action - self.min_action) + self.min_action
+        return actions
 
     def loss(
         self,
@@ -325,7 +333,7 @@ class SquashedGaussianActionHead(nn.Module):
         sizes = [embedding_size] + list(hidden_sizes)
         layers = []
         for j in range(len(sizes)-1):
-            layers.append(nn.Linear(sizes[j], sizes[j+1]))
+            layers += [nn.Linear(sizes[j], sizes[j+1]), nn.SiLU()]
         self.mean_proj = nn.Sequential(*layers)
 
         self.mu_layer = nn.Linear(hidden_sizes[-1], action_dim*pred_horizon)
@@ -346,6 +354,17 @@ class SquashedGaussianActionHead(nn.Module):
         else:  # mean pooling
             embeddings = token_group.tokens.mean(axis=-2)
         # Now, embeddings is (batch_size, window_size, embedding_size)
+
+        pi_action, logp_pi = self.forward_emb(embeddings)
+        
+        return pi_action, logp_pi
+
+    def forward_emb(self, embeddings, deterministic: bool = False, with_logprob: bool = True):
+        """
+        inputs: shape (batch_size, window_size, token_dim)
+        Returns:
+            mean: Predicted actions w/ shape (batch_size, window_size, pred_horizon, action_dim)
+        """
 
         net_out = self.mean_proj(embeddings)
         mu = self.mu_layer(net_out)
@@ -452,7 +471,7 @@ class ValueHead(nn.Module):
         loss_type: str = "mse",
         embedding_size: int = 384,
         hidden_sizes: list = [256, 256],
-        activation: nn.Module = nn.ReLU,
+        activation: nn.Module = nn.SiLU,
         output_activation: nn.Module = nn.Identity,
         device: str = 'cuda',
     ):
@@ -485,8 +504,7 @@ class ValueHead(nn.Module):
     def forward(self, transformer_outputs: Dict[str, TokenGroup], actions_out: torch.Tensor, train: bool = True):
         """
         Returns:
-            mean: Predicted values w/ shape (batch_size, window_size, pred_horizon, action_dim)
-            actions_out: has shape (batch_size, window_size, action_dim)
+            mean: Predicted values w/ shape (batch_size, window_size, pred_horizon, value_dim)
         """
         token_group = transformer_outputs[self.readout_key]
         assert token_group.tokens.ndim == 4, (
@@ -500,12 +518,21 @@ class ValueHead(nn.Module):
             embeddings = token_group.tokens.mean(axis=-2)
         # Now, embeddings is (batch_size, window_size, embedding_size)
 
-        input = torch.cat([embeddings, actions_out], dim=-1) 
-        mean = self.mean_proj(input)
-        mean = rearrange(
-            mean, "b w (p a) -> b w p a", p=self.pred_horizon, a=self.value_dim
-        )
+        inputs = torch.cat([embeddings, actions_out], dim=-1) 
+        mean = self.forward_emb(inputs)
+        
         return mean
+    
+    def forward_emb(self, inputs):
+        """ 
+            inputs: shape (batch_size, window_size, embedding_size)
+            outputs: shape (batch_size, window_size, pred_horizon, value_dim)
+        """
+        values = self.mean_proj(inputs)
+        values = rearrange(
+            values, "b w (p a) -> b w p a", p=self.pred_horizon, a=self.value_dim
+        )
+        return values
 
     def loss(
         self,

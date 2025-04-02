@@ -17,6 +17,8 @@ from .utils import mlp
 from safety_rl_manip.models.encoders.octo_transformer import OctoTransformer
 from safety_rl_manip.models.encoders.tokenizers import *
 from safety_rl_manip.models.encoders.action_heads import *
+from safety_rl_manip.models.encoders.transformer import Transformer, SinusoidalPositionalEncoding
+import einops
 
 LOG_STD_MAX = 2
 LOG_STD_MIN = -20
@@ -418,3 +420,410 @@ class SACTransformerIndepActorCritic(nn.Module):
             eps=optimizer_cfg.AdamW.eps,
             weight_decay=optimizer_cfg.AdamW.weight_decay)
         self.pi_scheduler, _ = create_scheduler(optimizer_cfg.scheduler, self.pi_optimizer)
+
+class SACTransformerIndepActorCriticSS(nn.Module):
+
+    def __init__(
+            self, 
+            env_observation_shapes, 
+            action_space,
+            device,
+            ac_kwargs = dict(),
+        ):
+        super().__init__()
+
+        self.ac_kwargs = ac_kwargs
+        self.env_observation_shapes = env_observation_shapes
+        self.window_size = ac_kwargs.window_size
+        self.pred_horizon = ac_kwargs.pred_horizon
+        self.token_embedding_size = ac_kwargs.token_embedding_size
+        self.position_embedding_type = ac_kwargs.position_embedding_type
+        self.action_dim = action_space.shape[0]
+        self.min_action = torch.from_numpy(action_space.low).to(device)
+        self.max_action = torch.from_numpy(action_space.high).to(device)
+        self.device = device
+
+        self.early_q_action_condn = 'early' in ac_kwargs.q_action_condn_type
+        self.late_q_action_condn = 'late' in ac_kwargs.q_action_condn_type
+        self.use_q_readout_tokens = ac_kwargs.Q_transformer_kwargs.transformer_output_type == 'cls'
+        self.use_pi_readout_tokens = ac_kwargs.pi_transformer_kwargs.transformer_output_type == 'cls'
+
+        self.num_obs_tokens = self.find_num_obs_tokens(ac_kwargs.observation_tokenizers)
+        
+        # create observation dense layers (tokenizers) for Q network (NOTE: no tokenizers, assuming all low-dim inputs)
+        self.q1_observation_tokenizers, self.q1_obs_tokenizer_kwargs = self.create_tokenizers(ac_kwargs.observation_tokenizers)
+        self.q1_position_embs = self.create_pos_embeddings()
+
+        self.q2_observation_tokenizers, self.q2_obs_tokenizer_kwargs = self.create_tokenizers(ac_kwargs.observation_tokenizers)
+        self.q2_position_embs = self.create_pos_embeddings()
+        if self.early_q_action_condn: # # create action tokenizers for Q network for 'SA' or 'CA' with the action tokens
+            self.env_observation_shapes['action'] = (self.action_dim,)
+            self.q1_action_tokenizers, self.q1_action_tokenizer_kwargs = self.create_tokenizers(ac_kwargs.action_tokenizers)
+            self.q2_action_tokenizers, self.q2_action_tokenizer_kwargs = self.create_tokenizers(ac_kwargs.action_tokenizers)
+        if self.use_q_readout_tokens: # Add readout tokens for Q network
+            self.readout_pos_emb_Q1, self.num_readout_tokens_Q1 = self.create_readout_embeddings(ac_kwargs.readouts_critic)
+            self.readout_pos_emb_Q2, self.num_readout_tokens_Q2 = self.create_readout_embeddings(ac_kwargs.readouts_critic)
+        self.Q1_transformer = Transformer(**ac_kwargs.Q_transformer_kwargs, device=device).to(device)
+        self.Q2_transformer = Transformer(**ac_kwargs.Q_transformer_kwargs, device=device).to(device)
+
+        # create observation tokenizers for pi network
+        self.pi_observation_tokenizers, self.pi_obs_tokenizer_kwargs = self.create_tokenizers(ac_kwargs.observation_tokenizers)
+        self.pi_position_embs = self.create_pos_embeddings()
+
+        if self.use_pi_readout_tokens: # Add readout tokens for pi network
+            self.readout_pos_emb_pi, self.num_readout_tokens_pi = self.create_readout_embeddings(ac_kwargs.readouts_actor)
+        self.pi_transformer = Transformer(**ac_kwargs.pi_transformer_kwargs, device=device).to(device)
+
+        # Value head
+        embedding_size = self.token_embedding_size + self.action_dim if self.late_q_action_condn else self.token_embedding_size
+        self.value_head1 = eval(ac_kwargs.heads.value.name)(
+            **ac_kwargs.heads.value.kwargs,
+            embedding_size=embedding_size,
+            device=device).to(device)
+        self.value_head2 = eval(ac_kwargs.heads.value.name)(
+            **ac_kwargs.heads.value.kwargs,
+            embedding_size=embedding_size,
+            device=device).to(device)
+
+        # Action head
+        self.action_head = eval(ac_kwargs.heads.action.name)(
+            **ac_kwargs.heads.action.kwargs,
+            action_dim=self.action_dim,
+            min_action=self.min_action,
+            max_action=self.max_action,
+            device=device).to(device)
+        
+        self.reset_parameters()
+
+    def find_num_obs_tokens(self, tokenizer_kwargs):
+        n_tokens = 0
+        for name, kwargs in tokenizer_kwargs.items():
+            if 'low_dim' in name:
+                for stack_key in kwargs.kwargs.obs_stack_keys:
+                    if len(self.env_observation_shapes[stack_key]) == 1:
+                        n_tokens += 1
+                    else:
+                        n_tokens += self.env_observation_shapes[stack_key][0]
+            else:
+                for stack_key in kwargs.kwargs.obs_stack_keys:
+                    n_tokens += kwargs.kwargs.num_tokens
+        return n_tokens
+    
+    def create_tokenizers(self, tokenizer_kwargs):
+        tokenizers, kwargs_list = nn.ModuleList(), []
+        for _, kwargs in tokenizer_kwargs.items():
+            if len(kwargs.kwargs.obs_stack_keys) > 0:
+                num_features = self.env_observation_shapes[kwargs.kwargs.obs_stack_keys[0]][-1]
+                tokenizers.append(
+                    mlp([num_features] + list(kwargs.kwargs.hidden_sizes) + [self.token_embedding_size], nn.SiLU, output_activation=nn.SiLU).to(self.device)
+                )
+                kwargs_list.append(kwargs.kwargs)
+        return tokenizers, kwargs_list
+    
+    def create_pos_embeddings(self):
+        if 'sinusoidal' in self.position_embedding_type:
+            position_embs = SinusoidalPositionalEncoding(self.token_embedding_size)
+        elif 'parameter' in self.position_embedding_type:
+            position_embs = nn.Parameter(torch.zeros(1, self.window_size*self.num_obs_tokens, self.token_embedding_size))
+        elif 'embedding' in self.position_embedding_type:
+            position_embs = nn.Embedding(self.window_size*self.num_obs_tokens, self.token_embedding_size)
+        else:
+            position_embs = None
+        return position_embs
+
+    def create_readout_embeddings(self, readout_kwargs):
+        readout_emb = nn.ModuleList()
+        total_readout_tokens = 0
+        for _, n_tokens in readout_kwargs.items():
+            total_readout_tokens += n_tokens
+            readout_emb.append(nn.Embedding(self.window_size*n_tokens, self.token_embedding_size).to(self.device))
+        return readout_emb, total_readout_tokens
+
+    def reset_parameters(self):
+
+        # Linear layers
+        params = [self.pi_observation_tokenizers, self.q1_observation_tokenizers, self.q1_observation_tokenizers]
+        if self.early_q_action_condn:
+            params.append(self.q1_action_tokenizers)
+            params.append(self.q2_action_tokenizers)
+        for layer in itertools.chain(*params):
+            if hasattr(layer, 'weight'): # filter out activations
+                nn.init.xavier_uniform_(layer.weight)
+                if layer.bias is not None:
+                    nn.init.normal_(layer.bias)
+
+        # Embedding layers for readouts
+        readout_params = []  
+        if self.use_q_readout_tokens:
+            readout_params.append(self.readout_pos_emb_Q1)
+            readout_params.append(self.readout_pos_emb_Q2)
+        if self.use_pi_readout_tokens:
+            readout_params.append(self.readout_pos_emb_pi)
+        for emb in itertools.chain(*readout_params):
+            nn.init.normal_(emb.weight)
+        
+    def get_q1_parameters(self):
+        params = [self.q1_observation_tokenizers.parameters(), self.Q1_transformer.parameters(), self.value_head1.parameters()]
+        if self.early_q_action_condn:
+            params.append(self.q1_action_tokenizers.parameters())
+        if self.use_q_readout_tokens:
+            params.append(self.readout_pos_emb_Q1.parameters())
+        return itertools.chain(*params)
+    
+    def get_q2_parameters(self):
+        params = [self.q2_observation_tokenizers.parameters(), self.Q2_transformer.parameters(), self.value_head2.parameters()]
+        if self.early_q_action_condn:
+            params.append(self.q2_action_tokenizers.parameters())
+        if self.use_q_readout_tokens:
+            params.append(self.readout_pos_emb_Q2.parameters())
+        return itertools.chain(*params)
+
+    def get_q_parameters(self):
+        return itertools.chain(self.get_q1_parameters(), self.get_q2_parameters())
+
+    def get_pi_parameters(self):
+        params = [self.pi_observation_tokenizers.parameters(), self.pi_transformer.parameters(), self.action_head.parameters()]
+        if self.use_pi_readout_tokens:
+            params.append(self.readout_pos_emb_pi.parameters())
+        return itertools.chain(*params)
+    
+    def freeze_q_params(self):
+        for p in self.get_q_parameters():
+            p.requires_grad = False
+    
+    def unfreeze_q_params(self):
+        for p in self.get_q_parameters():
+            p.requires_grad = True
+
+    def tokenize_inputs(self, obs, tokenizers, tokenizer_kwargs):
+        all_tokens = []
+        for tokenizer, tokenizer_kwargs in zip(tokenizers, tokenizer_kwargs):
+            for obs_key in tokenizer_kwargs.obs_stack_keys:
+                tokens = tokenizer(obs[obs_key])
+                if len(self.env_observation_shapes[obs_key]) == 1: 
+                    tokens = tokens.unsqueeze(2) # [batch_size, window_size, num_tokens, token_embedding_size]
+                all_tokens.append(tokens) 
+        
+        return torch.cat(all_tokens, dim=2) # [batch_size, window_size, num_tokens, token_embedding_size]
+    
+    def add_position_embeds(self, obs_tokens, position_embs):
+        if 'parameter' in self.position_embedding_type:
+            embedding = position_embs
+        elif 'embedding' in self.position_embedding_type or 'sinusoidal' in self.position_embedding_type:
+            embedding = position_embs(torch.arange(self.num_obs_tokens*self.window_size).to(self.device)) # Use only the timesteps we receive as input
+            embedding = embedding.reshape(1, *obs_tokens.shape[1:])
+        else:
+            embedding = torch.zeros(1, *obs_tokens.shape[1:], device=self.device)
+        
+        obs_tokens += torch.broadcast_to(embedding, obs_tokens.shape)
+        return obs_tokens
+
+    def get_readout_tokens(self, readout_embs, batch_size, horizon, kwargs):
+        readout_tokens = []
+        readouts = list(kwargs.keys())
+        total_readout_tokens = 0
+        for readout_emb, readout_name in zip(readout_embs, readouts):
+            n_tokens_for_readout = kwargs[readout_name]
+            total_readout_tokens += n_tokens_for_readout
+            tokens = torch.zeros(
+                (batch_size, horizon, n_tokens_for_readout, self.token_embedding_size),
+                device=self.device
+            )
+            embedding = readout_emb(torch.arange(n_tokens_for_readout*horizon).to(self.device)) # Use only the timesteps we receive as input
+            embedding = embedding.reshape(1, horizon, n_tokens_for_readout, self.token_embedding_size)
+            tokens += torch.broadcast_to(embedding, tokens.shape)
+            readout_tokens.append(tokens)
+        return torch.cat(readout_tokens, dim=2), total_readout_tokens # [batch_size, window_size, num_tokens, token_embedding_size]
+
+    def forward_action(self, obs, train=True):
+        '''
+            Output shape: [batch_size, window_size, pred_horizon, action_dim]
+        '''
+        batch_size, horizon  = obs[list(obs.keys())[0]].shape[:2]
+        all_obs_tokens = self.tokenize_inputs(obs, self.pi_observation_tokenizers, self.pi_obs_tokenizer_kwargs)
+        all_obs_tokens = self.add_position_embeds(all_obs_tokens, self.pi_position_embs)
+
+        # get readout tokens
+        if self.use_pi_readout_tokens:
+            all_readout_tokens, total_readout_tokens = self.get_readout_tokens(self.readout_pos_emb_pi, batch_size, horizon, self.ac_kwargs.readouts_actor)
+
+        # Get transformer outputs
+        if self.pi_transformer.attention_type == 'SA':
+            input_tokens = all_obs_tokens
+            if self.use_pi_readout_tokens: # tokens are added at the end
+                input_tokens = torch.cat([input_tokens, all_readout_tokens], dim=2)
+            input_tokens = einops.rearrange(
+                input_tokens,
+                "batch horizon n_tokens d -> batch (horizon n_tokens) d",
+            )
+            transformer_outputs = self.pi_transformer(
+                input_tokens, cond=None, attention_mask=None
+            )
+        else:
+            raise NotImplementedError('Attention type not implemented!')
+        
+        transformer_outputs = einops.rearrange(
+            transformer_outputs,
+            "batch (horizon n_tokens) d -> batch horizon n_tokens d",
+            horizon=horizon,
+        )
+        
+        if self.use_pi_readout_tokens:
+            state_tokens = transformer_outputs[:,:,-total_readout_tokens:,:].mean(axis=2) # (batch_size, window_size, embedding_size)
+        else:
+            state_tokens = transformer_outputs.mean(axis=2) # (batch_size, window_size, embedding_size)
+        
+        return self.action_head.forward_emb(state_tokens) # (batch_size, window_size, pred_horizon, embedding_size)
+    
+    def _forward_value(
+        self, 
+        obs, 
+        action, 
+        value_idx=1,
+        train=True
+    ):
+        batch_size, horizon  = obs[list(obs.keys())[0]].shape[:2]
+        if value_idx == 1:
+            q_observation_tokenizers = self.q1_observation_tokenizers
+            q_obs_tokenizer_kwargs = self.q1_obs_tokenizer_kwargs
+            Q_transformer = self.Q1_transformer
+            value_head = self.value_head1
+            position_embs = self.q1_position_embs
+        elif value_idx == 2:
+            q_observation_tokenizers = self.q2_observation_tokenizers
+            q_obs_tokenizer_kwargs = self.q2_obs_tokenizer_kwargs
+            Q_transformer = self.Q2_transformer
+            value_head = self.value_head2
+            position_embs = self.q2_position_embs
+        else:
+            raise NotImplementedError('value_idx invalid!')
+        all_obs_tokens = self.tokenize_inputs(obs, q_observation_tokenizers, q_obs_tokenizer_kwargs) # Get tokens for observations
+        all_obs_tokens = self.add_position_embeds(all_obs_tokens, position_embs)
+
+        # Get tokens for actions
+        if self.early_q_action_condn:
+            obs['action'] = action
+            if value_idx == 1:
+                q_action_tokenizers = self.q1_action_tokenizers
+                q_action_tokenizer_kwargs = self.q1_action_tokenizer_kwargs
+            elif value_idx == 2:
+                q_action_tokenizers = self.q2_action_tokenizers
+                q_action_tokenizer_kwargs = self.q2_action_tokenizer_kwargs
+            else:
+                raise NotImplementedError('value_idx invalid!')
+            all_action_tokens = self.tokenize_inputs(obs, q_action_tokenizers, q_action_tokenizer_kwargs)
+
+        # get readout tokens
+        if self.use_q_readout_tokens:
+            if value_idx == 1:
+                readout_pos_emb_Q = self.readout_pos_emb_Q1
+            elif value_idx == 2:
+                readout_pos_emb_Q = self.readout_pos_emb_Q2
+            else:
+                raise NotImplementedError('value_idx invalid!')
+            all_readout_tokens, total_readout_tokens = self.get_readout_tokens(readout_pos_emb_Q, batch_size, horizon, self.ac_kwargs.readouts_critic)
+
+        # Get transformer outputs
+        if Q_transformer.attention_type == 'SA':
+            input_tokens = all_obs_tokens
+            if self.early_q_action_condn:
+                input_tokens = torch.cat([input_tokens, all_action_tokens], dim=2)
+            if self.use_q_readout_tokens: # tokens are added at the end
+                input_tokens = torch.cat([input_tokens, all_readout_tokens], dim=2)
+            
+            input_tokens = einops.rearrange(
+                input_tokens,
+                "batch horizon n_tokens d -> batch (horizon n_tokens) d",
+            )
+            transformer_outputs = Q_transformer(
+                input_tokens, cond=None, attention_mask=None
+            )
+        elif Q_transformer.attention_type == 'AdaLN' or Q_transformer.attention_type == 'CA':
+            assert self.early_q_action_condn, 'Nothing to condition on!'
+            input_tokens = einops.rearrange(
+                all_obs_tokens,
+                "batch horizon n_tokens d -> batch (horizon n_tokens) d",
+            )
+            cond_tokens = einops.rearrange(
+                all_action_tokens,
+                "batch horizon n_tokens d -> batch (horizon n_tokens) d",
+            )
+            transformer_outputs = Q_transformer(
+                input_tokens, cond=cond_tokens, attention_mask=None
+            )
+            # TODO: figure out how to condition on readout tokens
+        else:
+            raise NotImplementedError('Attention type not implemented!')
+        
+        transformer_outputs = einops.rearrange(
+            transformer_outputs,
+            "batch (horizon n_tokens) d -> batch horizon n_tokens d",
+            horizon=horizon,
+        )
+
+        if self.use_q_readout_tokens:
+            value_tokens = transformer_outputs[:,:,-total_readout_tokens:,:].mean(axis=2) # (batch_size, window_size, embedding_size)
+        else:
+            value_tokens = transformer_outputs.mean(axis=2)
+        
+        if self.late_q_action_condn: 
+            value_tokens = torch.cat([value_tokens, action], dim=-1) 
+        return value_head.forward_emb(value_tokens)
+    
+    def forward_value(self, obs, action, train=True):
+        '''
+            Output shape: [batch_size, window_size, pred_horizon, value_dim]
+        '''
+        q1 = self._forward_value(obs, action, value_idx=1, train=True)
+        q2 = self._forward_value(obs, action, value_idx=2, train=True)
+        return q1, q2
+
+    def act(self, obs):
+        with torch.no_grad():
+            return self.forward_action(obs, train=False)[0][:,-1,0,:].cpu().numpy()
+        
+    def value(self, obs):
+        action_pred, logp_action = self.forward_action(obs)
+        q1_policy, q2_policy = self.forward_value(obs, action_pred[:,:,0,:])
+        outputs = {
+            'action': action_pred[:,-1,0,:],
+            'logp_action': logp_action[:,-1,0],
+            'q1_policy': q1_policy[:,-1,0,0],
+            'q2_policy': q2_policy[:,-1,0,0],
+        }
+        return outputs
+    
+    def action_value(self, obs, action):
+        if len(action.shape) == 2:
+            action = action.unsqueeze(1)
+        q1_sample, q2_sample = self.forward_value(obs, action)
+        return q1_sample[:,-1,0,0], q2_sample[:,-1,0,0]
+    
+    def pi(self, obs):
+        action_pred, logp_action = self.forward_action(obs)
+        return action_pred[:,-1,0,:], logp_action[:,-1,0]
+    
+    def create_optimizers(self, optimizer_cfg):
+        # Set up optimizers and schedulers for policy and q-function
+        self.q_optimizer = AdamW(self.get_q_parameters(), lr=optimizer_cfg.q_lr, 
+            eps=optimizer_cfg.AdamW.eps,
+            weight_decay=optimizer_cfg.AdamW.weight_decay)
+
+        self.pi_optimizer = AdamW(self.get_pi_parameters(), lr=optimizer_cfg.pi_lr, 
+            eps=optimizer_cfg.AdamW.eps,
+            weight_decay=optimizer_cfg.AdamW.weight_decay)
+
+        if optimizer_cfg.scheduler.warmup_restarts:
+            self.q_scheduler = CosineAnnealingWarmRestarts(
+                self.q_optimizer, 
+                T_0=optimizer_cfg.scheduler.T_0, 
+                T_mult=optimizer_cfg.scheduler.T_mult, 
+                eta_min=optimizer_cfg.scheduler.min_lr)
+            self.pi_scheduler = CosineAnnealingWarmRestarts(
+                self.pi_optimizer, 
+                T_0=optimizer_cfg.scheduler.T_0, 
+                T_mult=optimizer_cfg.scheduler.T_mult, 
+                eta_min=optimizer_cfg.scheduler.min_lr)
+        else:
+            self.q_scheduler, _ = create_scheduler(optimizer_cfg.scheduler, self.q_optimizer)
+            self.pi_scheduler, _ = create_scheduler(optimizer_cfg.scheduler, self.pi_optimizer)
