@@ -44,6 +44,13 @@ def main():
     mode = ckpt['train_cfg']['mode']
     algo_name = ckpt['train_cfg']['algo_name']
 
+    env_cfg = ckpt['env_cfg']
+    if 'env_cfg' in cfg:
+        eval_env_cfg = cfg.env_cfg
+        OmegaConf.set_struct(env_cfg, False) # to allow merging new fields into the config
+        env_cfg = OmegaConf.merge(env_cfg, eval_env_cfg)
+        OmegaConf.set_struct(env_cfg, True)
+
     if 'run_variant' in ckpt['train_cfg']:
         time_str = time_str + '_' + ckpt['train_cfg']['run_variant'] + '_' + 'evals'
 
@@ -51,7 +58,7 @@ def main():
 
     agent = eval(algo_name)(
         env_name, device, train_cfg=ckpt['train_cfg'], eval_cfg=eval_cfg,
-        env_cfg=ckpt['env_cfg'],
+        env_cfg=env_cfg,
         outFolder=eval_path, debug=cfg.debug
     )
     agent.eval(ckpt, eval_cfg=eval_cfg)

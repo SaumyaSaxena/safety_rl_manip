@@ -7,7 +7,7 @@ import gym
 import time
 import json
 from .TD3_core import TD3TransformerIndepActorCriticSS
-from .SAC_multimodal_indep import SACMultimodalIndep
+from .DDPG_multimodal_indep import DDPGMultimodalIndep
 import wandb
 from tqdm import trange
 from .utils import calc_false_pos_neg_rate, TopKLogger, ReplayBufferMultimodal, set_seed
@@ -16,7 +16,7 @@ from .datasets import *
 import imageio
 from safety_rl_manip.models.RARL.utils import print_parameters
 
-class TD3MultimodalIndep(SACMultimodalIndep):
+class TD3MultimodalIndep(DDPGMultimodalIndep):
 
     def __init__(
         self, env_name, device, train_cfg=None, eval_cfg=None,
@@ -113,6 +113,12 @@ class TD3MultimodalIndep(SACMultimodalIndep):
                     # params, as opposed to "mul" and "add", which would make new tensors.
                     p_targ.data.mul_(self.polyak)
                     p_targ.data.add_((1 - self.polyak) * p.data)
+        
+        actor_grad_norm = torch.cat([p.grad.view(-1) for p in self.ac.get_pi_parameters() if p.grad is not None]).norm().item()
+        critic_grad_norm = torch.cat([p.grad.view(-1) for p in self.ac.get_q_parameters() if p.grad is not None]).norm().item()
+
+        loss_info.update({f'actor_grad_norm': actor_grad_norm})
+        loss_info.update({f'critic_grad_norm': critic_grad_norm})
 
         _loss_pi = loss_pi.item() if loss_pi is not None else None
         return loss_q.item(), _loss_pi, loss_info

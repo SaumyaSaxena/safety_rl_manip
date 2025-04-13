@@ -1,11 +1,11 @@
 debug: False
-gpu: 1
+gpu: 0
 seed: 0
 tag: ${now:%Y-%m-%d-%H-%M-%S}
-run_name: "train_SS_DDPG_SA_indep_${train_cfg.mode}" 
+run_name: "train_SS_DDPG_CA_indep_${train_cfg.mode}" 
 # variant: ${train_cfg.warmup_cfg.warmup_type}_UpdatePiType_${train_cfg.warmup_cfg.warmupQ_expert.update_pi_type}
 # variant: 'no_terminal_gammaSch150_lrSch'
-variant: 'noise02_PosEmb_64_ALLlr1e4_StackTrue_scaleQ_noDropout_int_3obj'
+variant: 'CAreadout_lr1e4_sparseMask_scaleRew1000_NoStack_6obj_64_noDropout_int'
 
 hydra:
   run:
@@ -33,10 +33,18 @@ envs:
     costType: 'max_ell_g'
     epochs: ${train_cfg.epochs}
     constraint_type_repr: 'int'
+    shape_reward: False
+    scaling_target: 1000.0
+    scaling_safety: 1000.0
+    normalize_pos: False
+    n_rel_objs: 6
+    tok_k_mask: 3
+    objects:
+      names: ['porcelain_mug', 'blue_mug', 'red_mug', 'toy_sheep', 'supplement0', 'supplement2'] # 'porcelain_mug', 'blue_mug', 'red_mug', 'toy_sheep', 'supplement0', 'supplement2'
     observations:
-      low_dim: ['robot_state', 'objects_state']
+      low_dim: ['robot_state', 'objects_state', 'objects_mask'] # , 'objects_mask'
       rgb: [] # ['rgb_front_cam','rgb_eye_in_hand_cam']
-      append_stack_to_robot_state: True
+      append_stack_to_robot_state: False
 
 train_cfg:
   run_variant: ${variant}
@@ -82,7 +90,7 @@ train_cfg:
       # epochs are updated in code: epochs <- total_epochs - warmup - cooldown
       epochs: ${train_cfg.epochs}  # Total epochs to run (warmup + decay + cooldown)
       min_lr: 1.0e-5
-      warmup_lr: 5e-5
+      warmup_lr: 5.0e-4
       warmup_epochs: 10
       cooldown_epochs: 0
       warmup_restarts: False
@@ -93,7 +101,7 @@ train_cfg:
       # epochs are updated in code: epochs <- total_epochs - warmup - cooldown
       epochs: ${train_cfg.epochs}  # Total epochs to run (warmup + decay + cooldown)
       min_lr: 1.0e-5
-      warmup_lr: 5e-5
+      warmup_lr: 5.0e-4
       warmup_epochs: 10
       cooldown_epochs: 0
       warmup_restarts: False
@@ -104,14 +112,13 @@ train_cfg:
   update_after: 1000 # 1000
   update_steps: 50 # 50
   update_every: 50 # 50
-  act_noise: 0.2
+  act_noise: 0.1
   schedule_noise: False
   noise_decay: 0.985
-  num_test_episodes: 20
-  max_ep_len: 300
+  max_ep_len: 300 # check
   model_save_freq: 2
   plot_save_freq: 10
-  save_top_k: 5
+  save_top_k: 10
   ac_type: TransformerIndepActorCriticSS # 'MLPActorCritic', 'TransformerIndepActorCriticSS'
   ac_kwargs:
     TransformerIndepActorCriticSS:
@@ -119,7 +126,7 @@ train_cfg:
       pred_horizon: 1
       window_size: 1
       q_action_condn_type: 'early_late' # 'early', 'late', 'early_late' # action tokenizer is used only if this is 'early'
-      position_embedding_type: 'sinusoidal' # 'sinusoidal', 'parameter', 'embedding', None
+      position_embedding_type: 'None' # 'sinusoidal', 'parameter', 'embedding', None
       observation_tokenizers:
         image_primary:
           kwargs:
@@ -181,7 +188,7 @@ train_cfg:
           name: ValueHead
       Q_transformer_kwargs:
         add_position_embedding: False
-        transformer_output_type: 'mean' # 'mean', 'cls'
+        transformer_output_type: 'cls' # 'mean', 'cls'
         attention_dropout_rate: 0.0
         dropout_rate: 0.0
         mlp_dim: 256 # around 4 times the token_embedding_size
@@ -189,10 +196,10 @@ train_cfg:
         num_layers: 2 #12
         window_size: ${train_cfg.ac_kwargs.TransformerIndepActorCriticSS.window_size}
         token_embedding_size: ${train_cfg.ac_kwargs.TransformerIndepActorCriticSS.token_embedding_size}
-        attention_type: 'SA' # SA, CA, AdaLN
+        attention_type: 'CA' # SA, CA, AdaLN
       pi_transformer_kwargs:
         add_position_embedding: False
-        transformer_output_type: 'mean' # 'mean', 'cls'
+        transformer_output_type: 'cls' # 'mean', 'cls'
         attention_dropout_rate: 0.0
         dropout_rate: 0.0
         mlp_dim: 256 # around 4 times the token_embedding_size
@@ -200,14 +207,14 @@ train_cfg:
         num_layers: 2 #12
         window_size: ${train_cfg.ac_kwargs.TransformerIndepActorCriticSS.window_size}
         token_embedding_size: ${train_cfg.ac_kwargs.TransformerIndepActorCriticSS.token_embedding_size}
-        attention_type: 'SA' # SA, CA
+        attention_type: 'CA' # SA, CA
     MLPActorCritic:
       hidden_sizes: [256,256]
       activation: 'relu'
   resume_from_ckpt: False
   wandb_load:
-    run_path: iam-lab/safety_rl_manip/7kqhxsr4 # 6objs, RA
-    file: model/step_1087999_test_return_-3.13_succRate_0.73.pth
+    run_path: iam-lab/safety_rl_manip/31edd9u7 # 6objs, RA
+    file: model/step_135999_test_return_-566.38_succRate_0.26.pth
 
 eval_cfg:
   seed: ${seed}

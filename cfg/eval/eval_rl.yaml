@@ -3,7 +3,7 @@ debug: True # TODO: always true since we are not using wandb during eval
 
 eval_cfg:
   gpu: 1
-  seed: 3
+  seed: 20
   wandb_load:
     # run_path: iam-lab/safety_rl_manip/gncqv0nb # 1obj, Lagrange, hard target
     # file: model/step_103999_test_return_-14.21_succRate_0.48.pth
@@ -35,10 +35,17 @@ eval_cfg:
     # file: model/step_2623999_test_return_-10.55_succRate_0.91.pth
     # run_path: iam-lab/safety_rl_manip/icr8cblt # 3objs, RA, constraint types
     # file: model/step_2175999_test_return_-12.74_succRate_0.77.pth
-    run_path: iam-lab/safety_rl_manip/q8ui2gyd
-    file: model/step_751999_test_return_-21.15_succRate_0.33.pth
+    run_path: iam-lab/safety_rl_manip/8q9jai02
+    file: model/step_1615999_test_return_-9.64_succRate_0.85.pth
   eval_value_fn: False
   eval_safe_rollouts: True
   save_rollout_gifs: True
-  num_visualization_rollouts: 50
-  num_eval_episodes: 2
+  num_visualization_rollouts: 5
+  num_eval_episodes: 200
+  top_k: 2
+
+# remove below if using the same env as during training
+# env_cfg:
+#   n_rel_objs: 6
+#   objects:
+#     names: ['blue_mug', 'porcelain_mug', 'toy_sheep', 'supplement0', 'supplement2', 'red_mug'] #  , 'toy_sheep', 'supplement0'

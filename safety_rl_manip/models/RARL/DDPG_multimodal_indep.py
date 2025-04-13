@@ -6,7 +6,8 @@ from torch.optim import AdamW
 import gym
 import time
 import json
-from .DDPG_core import TransformerIndepActorCritic, TransformerIndepAdaLNActorCritic, TransformerIndepActorCriticSS
+from .DDPG_core import TransformerIndepActorCritic, TransformerIndepAdaLNActorCritic, TransformerIndepActorCriticSS, MLPActorCriticMultimodal
+from .TD3_core import TD3TransformerIndepActorCriticSS
 import wandb
 from tqdm import trange
 from .utils import calc_false_pos_neg_rate, TopKLogger, ReplayBufferMultimodal, set_seed
@@ -14,92 +15,10 @@ from timm.scheduler.scheduler_factory import create_scheduler
 from .datasets import *
 import imageio
 from safety_rl_manip.models.RARL.utils import print_parameters
-
+import matplotlib.pyplot as plt
 
 class DDPGMultimodalIndep(torch.nn.Module):
-    """
-    Deep Deterministic Policy Gradient (DDPG)
 
-
-    Args:
-        env_fn : A function which creates a copy of the environment.
-            The environment must satisfy the OpenAI Gym API.
-
-        actor_critic: The constructor method for a PyTorch Module with an ``act`` 
-            method, a ``pi`` module, and a ``q`` module. The ``act`` method and
-            ``pi`` module should accept batches of observations as inputs,
-            and ``q`` should accept a batch of observations and a batch of 
-            actions as inputs. When called, these should return:
-
-            ===========  ================  ======================================
-            Call         Output Shape      Description
-            ===========  ================  ======================================
-            ``act``      (batch, act_dim)  | Numpy array of actions for each 
-                                           | observation.
-            ``pi``       (batch, act_dim)  | Tensor containing actions from policy
-                                           | given observations.
-            ``q``        (batch,)          | Tensor containing the current estimate
-                                           | of Q* for the provided observations
-                                           | and actions. (Critical: make sure to
-                                           | flatten this!)
-            ===========  ================  ======================================
-
-        ac_kwargs (dict): Any kwargs appropriate for the ActorCritic object 
-            you provided to DDPG.
-
-        seed (int): Seed for random number generators.
-
-        steps_per_epoch (int): Number of steps of interaction (state-action pairs) 
-            for the agent and the environment in each epoch.
-
-        epochs (int): Number of epochs to run and train agent.
-
-        replay_size (int): Maximum length of replay buffer.
-
-        gamma (float): Discount factor. (Always between 0 and 1.)
-
-        polyak (float): Interpolation factor in polyak averaging for target 
-            networks. Target networks are updated towards main networks 
-            according to:
-
-            .. math:: \\theta_{\\text{targ}} \\leftarrow 
-                \\rho \\theta_{\\text{targ}} + (1-\\rho) \\theta
-
-            where :math:`\\rho` is polyak. (Always between 0 and 1, usually 
-            close to 1.)
-
-        pi_lr (float): Learning rate for policy.
-
-        q_lr (float): Learning rate for Q-networks.
-
-        batch_size (int): Minibatch size for SGD.
-
-        start_steps (int): Number of steps for uniform-random action selection,
-            before running real policy. Helps exploration.
-
-        update_after (int): Number of env interactions to collect before
-            starting to do gradient descent updates. Ensures replay buffer
-            is full enough for useful updates.
-
-        update_every (int): Number of env interactions that should elapse
-            between gradient descent updates. Note: Regardless of how long 
-            you wait between updates, the ratio of env steps to gradient steps 
-            is locked to 1.
-
-        act_noise (float): Stddev for Gaussian exploration noise added to 
-            policy at training time. (At test time, no noise is added.)
-
-        num_test_episodes (int): Number of episodes to test the deterministic
-            policy at the end of each epoch.
-
-        max_ep_len (int): Maximum length of trajectory / episode / rollout.
-
-        logger_kwargs (dict): Keyword args for EpochLogger.
-
-        save_freq (int): How often (in terms of gap between epochs) to save
-            the current policy and value function.
-
-    """
     def __init__(
         self, env_name, device, train_cfg=None, eval_cfg=None,
         env_cfg=None, outFolder='', debug=False,
@@ -227,7 +146,7 @@ class DDPGMultimodalIndep(torch.nn.Module):
         q_pi = self.ac.value(o)['q_policy']
         return -q_pi.mean()
 
-    def update(self, data, epoch):
+    def update(self, data, epoch, timer):
         # First run one gradient descent step for Q.
         self.ac.q_optimizer.zero_grad()
         loss_q, loss_info = self.compute_loss_q(data)
@@ -238,8 +157,7 @@ class DDPGMultimodalIndep(torch.nn.Module):
 
         # Freeze Q-network so you don't waste computational effort 
         # computing gradients for it during the policy learning step.
-        for p in self.ac.get_q_parameters():
-            p.requires_grad = False
+        self.ac.freeze_q_params()
 
         # Next run one gradient descent step for pi.
         self.ac.pi_optimizer.zero_grad()
@@ -250,8 +168,7 @@ class DDPGMultimodalIndep(torch.nn.Module):
         self.ac.pi_scheduler.step(epoch)
 
         # Unfreeze Q-network so you can optimize it at next DDPG step.
-        for p in self.ac.get_q_parameters():
-            p.requires_grad = True
+        self.ac.unfreeze_q_params()
 
         # Finally, update target networks by polyak averaging.
         # start = time.time()
@@ -301,22 +218,21 @@ class DDPGMultimodalIndep(torch.nn.Module):
     def rollout_episodes(self, num_episodes):
         FP, FN, TP, TN, num_pred_success, num_gt_success = 0, 0, 0, 0, 0, 0
         avg_return, avg_ep_len = 0. , 0.
+        avg_pred_v_success, avg_pred_v_fail = 0. , 0.
         failure_analysis = {k:0 for k in self.test_env.all_failure_modes+['timeout']}
         for i in trange(num_episodes, desc="Testing"):
             o, d, ep_ret = self.test_env.reset(), False, 0
 
             with torch.no_grad():
-                o = self.replay_buffer.get_batch_from_obs(o)
-                outputs = self.ac_targ.value(o)
-            # pred_v = self.ac_targ(
-            #     torch.from_numpy(o).float().to(self.device), 
-            #     self.ac_targ.pi(torch.from_numpy(o).float().to(self.device))).detach().cpu().numpy()
-                
-            pred_success = outputs['q_policy'].detach().cpu().numpy() > 0.
+                outputs = self.ac_targ.value(self.replay_buffer.get_batch_from_obs(o))
+
+            pred_v =  outputs['q_policy'].detach().cpu().numpy() if 'q_policy' in outputs else outputs['q1_policy'].detach().cpu().numpy()
+            pred_success = pred_v > 0.
             
             gt_success = False
             while not(d or (self.test_env.current_timestep == self.max_ep_len)):
-                o, r, d, _ = self.test_env.step(outputs['action'].detach().cpu().numpy())
+                # at = outputs['action'].detach().cpu().numpy()
+                o, r, d, _ = self.test_env.step(self.get_action(o, 0))
                 ep_ret += r
             avg_return += ep_ret
             avg_ep_len += self.test_env.current_timestep
@@ -327,6 +243,11 @@ class DDPGMultimodalIndep(torch.nn.Module):
                 failure_analysis[self.test_env.failure_mode] += 1
             else:
                 failure_analysis['timeout'] += 1
+            
+            if gt_success:
+                avg_pred_v_success += pred_v
+            else:
+                avg_pred_v_fail += pred_v
 
             FP += np.sum(np.logical_and((gt_success == False), (pred_success == True)))
             FN += np.sum(np.logical_and((gt_success == True), (pred_success == False)))
@@ -337,9 +258,13 @@ class DDPGMultimodalIndep(torch.nn.Module):
         avg_return = avg_return/num_episodes
         avg_ep_len = avg_ep_len/num_episodes
         success_rate = num_gt_success/num_episodes
+        for k,v in failure_analysis.items():
+            failure_analysis[k] = v/num_episodes*100
         info = {
             'Average_return': avg_return,
             'Average_episode_len': avg_ep_len,
+            'Average_pred_v_success': float(avg_pred_v_success/num_gt_success) if num_gt_success > 0 else 0,
+            'Average_pred_v_fail': float(avg_pred_v_fail/(num_episodes-num_gt_success)) if (num_episodes-num_gt_success) > 0 else 0,
             'False_positive_rate': false_pos_rate,
             'False_negative_rate': false_neg_rate,
             'Total_num_episodes': float(num_episodes),
@@ -422,7 +347,7 @@ class DDPGMultimodalIndep(torch.nn.Module):
             if t >= self.update_after and t % self.update_every == 0:
                 for _ in range(self.update_steps):
                     batch = self.replay_buffer.sample_batch(self.batch_size)
-                    loss_q, loss_pi, loss_info = self.update(batch, epoch)
+                    loss_q, loss_pi, loss_info = self.update(batch, epoch, t)
                     if not self.debug:
                         log_dict.update({f'loss_q': loss_q})
                         log_dict.update({f'loss_pi': loss_pi})
@@ -509,30 +434,29 @@ class DDPGMultimodalIndep(torch.nn.Module):
             if self.test_env.visual_initial_states is not None:
                 init_s = self.test_env.visual_initial_states[idx]
 
-            rollout, at_all, imgs = [], [], []
+            rollout, at_all, imgs, attn_weights_all = [], [], [], []
             o, d, ep_ret, ep_len = self.test_env.reset(start=init_s), False, 0, 0
             rollout.append(o)
 
             with torch.no_grad():
-                o = self.replay_buffer.get_batch_from_obs(o)
-                outputs = self.ac_targ.value(o)
+                outputs = self.ac_targ.value(self.replay_buffer.get_batch_from_obs(o))
 
-            pred_success = outputs['q_policy'].detach().cpu().numpy() > 0.
+            pred_v = outputs['q_policy'].detach().cpu().numpy() if 'q_policy' in outputs else outputs['q1_policy'].detach().cpu().numpy()
+            pred_success = pred_v > 0.
 
             gt_success = False
 
             while not(d or (ep_len == self.max_ep_len)):
                 # Take deterministic actions at test time (noise_scale=0)
-                at = outputs['action'].detach().cpu().numpy()
+                # at = outputs['action'].detach().cpu().numpy()
+                at = self.get_action(o, 0)
                 o, r, d, _ = self.test_env.step(at)
-                # fail, _ = self.test_env.check_failure(o.reshape(1,self.test_env.n))
-                # succ, _ = self.test_env.check_success(o.reshape(1,self.test_env.n))
-                # gt_success = np.logical_or(np.logical_and(not fail[0], succ[0]), gt_success)
 
                 gt_success = self.test_env.failure_mode=='success'
                 
-                at_all.append(at)
+                at_all.append(at[0])
                 rollout.append(o)
+                attn_weights_all.append([aw.detach().cpu().numpy() for aw in self.ac.pi_attention_weights])
                 if save_rollout_gifs:
                     self.test_env.renderer.update_scene(self.test_env.data, camera=self.test_env.front_cam_name) 
                     img = self.test_env.renderer.render()
@@ -543,8 +467,56 @@ class DDPGMultimodalIndep(torch.nn.Module):
                 file_name = f'eval_traj_{self.mode}_{len(trajs)}_pred_succ_{pred_success}_gt_succ_{gt_success}_{self.test_env.failure_mode}'
                 imageio.mimsave(os.path.join(self.figureFolder, f'{file_name}.gif'), 
                     imgs, duration=ep_len*self.test_env.dt)
-                # self.test_env.plot_trajectory(np.stack(rollout,axis=0), np.stack(at_all,axis=0), os.path.join(self.figureFolder, f'{file_name}.png'))
+                self.test_env.plot_trajectory(rollout, np.stack(at_all,axis=0), os.path.join(self.figureFolder, f'{file_name}.png'))
+                # self.plot_attention_weights(attn_weights_all, file_name)
+
         return trajs
+    
+    def plot_attention_weights(self, attn_weights_all, file_name):
+        num_attn_blocks = len(attn_weights_all[0])
+
+        attn_weights_array = np.stack(
+            [np.concatenate([aw_t_block for aw_t_block in aw_t], axis=0) for aw_t in attn_weights_all], axis=0
+        )
+        num_attn_blocks, num_heads, num_tokens = attn_weights_array.shape[1:4]
+        tick_labels = ['ee', 'bottom block', 'top_block'] + self.env.rel_obj_names
+
+        if self.ac.use_pi_readout_tokens:
+            num_tokens = num_tokens - 1  
+        
+            fig, axes = plt.subplots(1, figsize=(12, 12))
+            attn_avg = (attn_weights_array[:,:,:,-1,:num_tokens].mean(axis=1)).mean(axis=1)
+            im = axes.pcolormesh(attn_avg.T, cmap='viridis', edgecolors='k', linewidth=0.5)
+            fig.colorbar(im, ax=axes)
+            axes.set_title(f'Attention average')
+            axes.set_xlabel('Time')
+            axes.set_ylabel('Blocks')
+            axes.set_yticks(np.arange(num_tokens)+0.5)  # Set tick positions
+            axes.set_yticklabels(tick_labels)  # Set custom tick labels
+            save_plot_name = os.path.join(self.figureFolder, f'{file_name}_attn_weights_average.png')
+            plt.savefig(save_plot_name)
+            plt.close()
+
+        for i in range(num_attn_blocks):
+            # attn_weight_block_traj = np.concatenate([aw[i] for aw in attn_weights_all], axis=0)
+            # num_heads = attn_weight_block_traj.shape[1]
+
+            fig, axes = plt.subplots(num_heads, figsize=(12, 12))
+            for j in range(num_heads):
+                if self.ac.use_pi_readout_tokens:
+                    attn_weight = attn_weights_array[:,i,j,-1,:num_tokens] # TODO: remove hardcoded
+                im = axes[j].pcolormesh(attn_weight.T, cmap='viridis', edgecolors='k', linewidth=0.5)
+
+                fig.colorbar(im, ax=axes[j])
+                axes[j].set_title(f'Attention block {i}, Attention head {j}')
+                axes[j].set_xlabel('Time')
+                axes[j].set_ylabel('Blocks')
+                axes[j].set_yticks(np.arange(num_tokens)+0.5)  # Set tick positions
+                axes[j].set_yticklabels(tick_labels)  # Set custom tick labels
+
+            save_plot_name = os.path.join(self.figureFolder, f'{file_name}_attn_weights_attn_block{i}.png')
+            plt.savefig(save_plot_name)
+            plt.close()
 
     def eval(self, ckpt=None, eval_cfg=None, debug=True):
         if ckpt is not None:

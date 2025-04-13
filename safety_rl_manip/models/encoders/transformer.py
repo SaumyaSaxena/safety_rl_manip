@@ -308,12 +308,11 @@ class CausalSelfAttention(nn.Module):
         # mask[:, -2:] = 0
         # mask[-2:, -2:] = torch.eye(2)
         if mask is not None:
-            mask = mask.view(1,1,T,T).to(self.device)
+            if len(mask.shape) == 2:
+                mask = mask.view(1,1,T,T).to(self.device)
             att = att.masked_fill(mask[..., :T, :T] == 0, float("-inf"))
-
-        att = F.softmax(
-            att, dim=-1
-        )  # shape [B, NH, T, T], last dimension has score over all T for each sequence member
+        
+        att = F.softmax(att, dim=-1)  # shape [B, NH, T, T], last dimension has score over all T for each sequence member
         # dropout on attention
         # att = self.nets["attn_dropout"](att)
 
@@ -327,7 +326,7 @@ class CausalSelfAttention(nn.Module):
         y = self.nets["output"](y)
         y = self.nets["output_dropout"](y)
 
-        return y
+        return y, att
 
     def output_shape(self, input_shape=None):
         """
@@ -515,7 +514,7 @@ class Encoder1DBlock(nn.Module):
         x = self.layer_norm1(inputs)
 
         if self.use_rs_attn:
-            x = self.multihead_attention(x, attention_mask)
+            x, attn_weights = self.multihead_attention(x, attention_mask)
         else:
             x, attn_weights = self.multihead_attention(x, x, x, attn_mask=attention_mask)
 
@@ -526,7 +525,7 @@ class Encoder1DBlock(nn.Module):
         y = self.layer_norm2(x)
         y = self.mlp_block(y)
 
-        return x + y
+        return x + y, attn_weights
 
 class AdaLNBlock(nn.Module):
     """
@@ -568,12 +567,15 @@ class AdaLNBlock(nn.Module):
     def forward(self, x, cond, attn_mask=None):
         shift_msa, scale_msa, gate_msa, shift_mlp, scale_mlp, gate_mlp = self.adaLN_modulation(cond).chunk(6, dim=2)
         moduln = modulate(self.layer_norm1(x), shift_msa, scale_msa)
-        x = x + gate_msa * self.multihead_attention(moduln)
+
+        out, attn_weights = self.multihead_attention(moduln, attn_mask)
+
+        x = x + gate_msa * out
         x = x + gate_mlp * self.mlp(modulate(self.layer_norm2(x), shift_mlp, scale_mlp))
-        return x
+        return x, attn_weights
 
 class CrossAttentionBlock(nn.Module):
-    """Transformer encoder layer.
+    """Transformer encoder layer. Information bottleneck
 
     Attributes:
       inputs: input data.
@@ -597,7 +599,15 @@ class CrossAttentionBlock(nn.Module):
 
         self.layer_norm1 = nn.LayerNorm(token_embedding_size)
 
-        self.multihead_self_attention = CausalSelfAttention(
+        self.multihead_self_attention1 = CausalSelfAttention(
+            embed_dim=token_embedding_size,
+            num_heads=num_heads,
+            attn_dropout=attention_dropout_rate,
+            output_dropout=dropout_rate,
+            device = device
+        )
+
+        self.multihead_self_attention2 = CausalSelfAttention(
             embed_dim=token_embedding_size,
             num_heads=num_heads,
             attn_dropout=attention_dropout_rate,
@@ -631,12 +641,13 @@ class CrossAttentionBlock(nn.Module):
         # Attention block.
         assert inputs.ndim == 3, f"Expected (batch, seq, hidden) got {inputs.shape}"
         x = self.layer_norm1(inputs)
+        condx = self.layer_norm2(cond)
 
-        x = self.multihead_self_attention(x)
+        condx, attn_weights = self.multihead_self_attention1(condx, attn_mask) # conditioning variable has more tokens, information bottleneck
 
-        x = self.layer_norm2(x)
+        x = self.cross_attention(x, condx)
 
-        x = self.cross_attention(x, cond)
+        x, _ = self.multihead_self_attention2(x)
 
         x = self.dropout(x)
         x = x + inputs
@@ -645,7 +656,7 @@ class CrossAttentionBlock(nn.Module):
         y = self.layer_norm3(x)
         y = self.mlp_block(y)
 
-        return x + y
+        return x + y, attn_weights
     
 class Transformer(nn.Module):
     """Transformer Model Encoder for sequence to sequence translation.
@@ -721,11 +732,13 @@ class Transformer(nn.Module):
             x = self.pos_emb_dropout(x)
 
         # Input Encoder
+        attention_weights = []
         for lyr in range(self.num_layers):
-            x = self.encoder_blocks[lyr](x, cond, attention_mask)
+            x, attn_weights = self.encoder_blocks[lyr](x, cond, attention_mask)
+            attention_weights.append(attn_weights)
         
         encoded = self.layer_norm(x)
-        return encoded
+        return encoded, attention_weights
 
 
 def common_transformer_sizes(transformer_size: str) -> (int, dict):

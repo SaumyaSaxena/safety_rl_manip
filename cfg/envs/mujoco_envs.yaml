@@ -135,6 +135,8 @@ slide_pickup_obstacles_mujoco_env-v0:
 
 slide_pickup_clutter_mujoco_env-v0:
   use_constraint_types: False
+  normalize_pos: False
+  normalize_vel: False
   constraint_types: ['soft_contact', 'no_contact'] # when use_constraint_types=True, constraint types sampled from here during training 
   obj_to_constraint_map: # when use_constraint_types=True, not used during training
     toy_squirrel: 'no_contact'
@@ -237,7 +239,10 @@ slide_pickup_clutter_mujoco_env-v0:
 
 
 slide_pickup_clutter_mujoco_multimodal_env-v0:
-  n_rel_objs: 3
+  n_rel_objs: 4
+  tok_k_mask: 2
+  normalize_pos: False
+  normalize_vel: False
   constraint_type_repr: 'int' # 'int', 'one_hot'
   use_constraint_types: True # Always set to True since we are appending object/constraint types to object states 
   constraint_types: ['no_contact'] # when use_constraint_types=True, constraint types sampled from here during training; ['soft_contact', 'no_contact']
@@ -291,8 +296,8 @@ slide_pickup_clutter_mujoco_multimodal_env-v0:
     target_set:
       # low: [-5.0, -0.3, -0.5] # added to initial bottom block state to get target boundary low [-0.1, -0.1, -0.1]
       # high: [-0.25, 0.3, 0.5] # added to initial bottom block state to get target boundary high [0.1, 0.1, 0.1]
-      low: [-0.55, 0.2, -0.00] # absolute 0.06-0.06
-      high: [-0.3, 0.99, 0.12] # absolute 0.06+0.06
+      low: [-0.7, 0.2, -0.0] # absolute 0.06-0.07
+      high: [-0.3, 0.99, 0.12] # absolute 0.06+0.07
     state_ranges: # x, y
       low: [0.0, 0.45] 
       high: [0.5, 0.75]
@@ -313,7 +318,7 @@ slide_pickup_clutter_mujoco_multimodal_env-v0:
       low: [0.03, -0.00] # relative to block_bottom
       high: [0.04, 0.00] # relative to block_bottom
   objects:
-    names: ['porcelain_mug', 'blue_mug', 'red_mug'] # 'toy_squirrel', 'toy_sheep', 'porcelain_mug', 'blue_mug', 'red_mug', 'supplement0'
+    names: ['porcelain_mug', 'blue_mug', 'red_mug', 'supplement0'] # 'toy_squirrel', 'toy_sheep', 'porcelain_mug', 'blue_mug', 'red_mug', 'supplement0'
     state_ranges: # x, y
       low: [-0.55, 0.3]
       high: [0.7, 0.9]
@@ -329,9 +334,9 @@ slide_pickup_clutter_mujoco_multimodal_env-v0:
       - [0.2, 0.8]
     N_x: [50, 50]
   observations:
-    low_dim: ['robot_state', 'objects_state']
+    low_dim: ['robot_state', 'objects_state', 'objects_mask']
     rgb: ['rgb_front_cam']
-    append_stack_to_robot_state: True
+    append_stack_to_robot_state: False
   penalty: 10.
   reward: -10.
   shape_reward: False

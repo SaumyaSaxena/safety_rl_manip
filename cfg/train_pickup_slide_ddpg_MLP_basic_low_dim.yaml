@@ -1,0 +1,133 @@
+debug: False
+gpu: 1
+seed: 0
+tag: ${now:%Y-%m-%d-%H-%M-%S}
+run_name: "train_SS_DDPG_MLPmultimodal_${train_cfg.mode}" 
+# variant: ${train_cfg.warmup_cfg.warmup_type}_UpdatePiType_${train_cfg.warmup_cfg.warmupQ_expert.update_pi_type}
+# variant: 'no_terminal_gammaSch150_lrSch'
+variant: 'rerunAct_noConstraint_types_3obj'
+
+hydra:
+  run:
+    dir: outputs/train/${run_name}/${tag}_${variant}
+  job:
+    chdir: True
+
+defaults:
+  - /envs: mujoco_envs.yaml
+  - _self_
+
+wandb:
+  entity: iam-lab
+  group: drabe/DDPG
+  project: safety_rl_manip
+  name: ${run_name}_${variant}
+wandb_resume_id: null
+
+env_name: "slide_pickup_clutter_mujoco_multimodal_env-v0"
+envs:
+  slide_pickup_clutter_mujoco_multimodal_env-v0:
+    doneType: 'all'
+    return_type: 'reward'
+    mode: ${train_cfg.mode}
+    costType: 'max_ell_g'
+    epochs: ${train_cfg.epochs}
+    constraint_type_repr: 'int'
+    use_constraint_types: False
+    observations:
+      low_dim: ['robot_state', 'objects_state']
+      rgb: [] # ['rgb_front_cam','rgb_eye_in_hand_cam']
+      append_stack_to_robot_state: False
+
+train_cfg:
+  run_variant: ${variant}
+  algo_name: DDPGMultimodalIndep
+  warmup: False
+  warmup_cfg:
+    batch_size: 200
+    num_epochs: 60
+    warmup_q_lr: 1e-3
+    warmup_pi_lr: 1e-3
+    warmup_type: 'warmup_pi' # 'warmupQ_terminal_all_states', 'warmupQ_expert', 'warmup_pi'
+    warmupQ_terminal_all_states:
+      num_terminal_samples: 1e+4
+    warmupQ_expert:
+      num_mixed_terminal_samples: 1e+4
+      expert_data_loc: '/home/saumyas/Projects/safe_control/HJR_manip/outputs/DoubleIntegrator/goto_goal_datasets/data_DoubleIntegrator_goto_goal_N_620.pkl'
+      update_pi: True
+      update_pi_type: 'expert' # 'expert', 'maxQ'
+    warmup_pi:
+      expert_data_loc: '/home/saumyas/Projects/safe_control/HJR_manip/outputs/DoubleIntegrator/goto_goal_datasets/data_DoubleIntegrator_goto_goal_N_620.pkl'
+  add_expert_to_buffer: False
+  expert_data_loc: '/home/saumyas/Projects/safe_control/HJR_manip/outputs/DoubleIntegrator/goto_goal_datasets/data_DoubleIntegrator_goto_goal_N_620.pkl'
+  expert_data_frac: 0.75
+  mode: 'RA' # RA, lagrange
+  seed: ${seed}
+  steps_per_epoch: 4000 # 4000
+  epochs: 1200
+  replay_size: 1e+6
+  gamma: 0.99
+  schedule_gamma: False
+  gamma_warmup_epochs: 150
+  scale_q_loss: 1000.0
+  polyak: 0.995
+  optimizer:
+    pi_lr: 1e-3
+    q_lr: 1e-3
+    clip_grad_norm: 5.0
+    AdamW:
+      eps: 1.0e-8
+      weight_decay: 0.01
+    pi_scheduler:
+      sched: cosine
+      # epochs are updated in code: epochs <- total_epochs - warmup - cooldown
+      epochs: ${train_cfg.epochs}  # Total epochs to run (warmup + decay + cooldown)
+      min_lr: 1.0e-5
+      warmup_lr: 1.0e-4
+      warmup_epochs: 10
+      cooldown_epochs: 0
+      warmup_restarts: False
+      T_0: 10
+      T_mult: 2
+    q_scheduler:
+      sched: cosine
+      # epochs are updated in code: epochs <- total_epochs - warmup - cooldown
+      epochs: ${train_cfg.epochs}  # Total epochs to run (warmup + decay + cooldown)
+      min_lr: 1.0e-5
+      warmup_lr: 1.0e-4
+      warmup_epochs: 10
+      cooldown_epochs: 0
+      warmup_restarts: False
+      T_0: 10
+      T_mult: 2
+  batch_size: 200 # 200
+  start_steps: 10000 # 10000
+  update_after: 1000 # 1000
+  update_steps: 50 # 50
+  update_every: 50 # 50
+  act_noise: 0.1
+  schedule_noise: False
+  noise_decay: 0.985
+  num_test_episodes: 20
+  max_ep_len: 300
+  model_save_freq: 2
+  plot_save_freq: 10
+  save_top_k: 5
+  ac_type: MLPActorCriticMultimodal # 'MLPActorCritic', 'TransformerIndepActorCriticSS'
+  ac_kwargs:
+    MLPActorCriticMultimodal:
+      hidden_sizes: [256,256]
+  resume_from_ckpt: False
+  wandb_load:
+    run_path: iam-lab/safety_rl_manip/7kqhxsr4 # 6objs, RA
+    file: model/step_1087999_test_return_-3.13_succRate_0.73.pth
+
+eval_cfg:
+  seed: ${seed}
+  eval_value_fn: False
+  test_value_fn: False
+  num_test_episodes: 100
+  eval_safe_rollouts: True
+  num_eval_episodes: 5000
+  save_rollout_gifs: True
+  num_visualization_rollouts: 20
