@@ -1,11 +1,12 @@
 debug: False
-gpu: 1
+gpu: 0
 seed: 0
 tag: ${now:%Y-%m-%d-%H-%M-%S}
 run_name: "train_SS_DDPG_MLPmultimodal_${train_cfg.mode}" 
 # variant: ${train_cfg.warmup_cfg.warmup_type}_UpdatePiType_${train_cfg.warmup_cfg.warmupQ_expert.update_pi_type}
 # variant: 'no_terminal_gammaSch150_lrSch'
-variant: 'rerunAct_noConstraint_types_3obj'
+# variant: '4layers_6objs_AnyContact_NoOver_MultiGoal'
+variant: '4layers_6objs'
 
 hydra:
   run:
@@ -33,9 +34,21 @@ envs:
     costType: 'max_ell_g'
     epochs: ${train_cfg.epochs}
     constraint_type_repr: 'int'
-    use_constraint_types: False
+    use_constraint_types: True
+    scaling_target: 1000.0
+    scaling_safety: 1000.0
+    reset_grasped: True
+    normalize_pos: False
+    less_crowded: False
+    multi_goal: False
+    constraint_types: ['no_contact'] # , 'soft_contact', 'any_contact', 'no_over'
+    randomize_constraint_types: True
+    n_rel_objs: 6
+    tok_k_mask: 3
+    objects:
+      names: ['porcelain_mug', 'blue_mug', 'red_mug', 'toy_sheep', 'supplement0', 'supplement2'] # 'porcelain_mug', 'blue_mug', 'red_mug', 'toy_sheep', 'supplement0', 'supplement2'
     observations:
-      low_dim: ['robot_state', 'objects_state']
+      low_dim: ['robot_state', 'objects_state'] # , 'objects_mask', 'objects_semantics'
       rgb: [] # ['rgb_front_cam','rgb_eye_in_hand_cam']
       append_stack_to_robot_state: False
 
@@ -116,7 +129,7 @@ train_cfg:
   ac_type: MLPActorCriticMultimodal # 'MLPActorCritic', 'TransformerIndepActorCriticSS'
   ac_kwargs:
     MLPActorCriticMultimodal:
-      hidden_sizes: [256,256]
+      hidden_sizes: [256,256,256,256]
   resume_from_ckpt: False
   wandb_load:
     run_path: iam-lab/safety_rl_manip/7kqhxsr4 # 6objs, RA
@@ -124,6 +137,7 @@ train_cfg:
 
 eval_cfg:
   seed: ${seed}
+  async_eval: False # check
   eval_value_fn: False
   test_value_fn: False
   num_test_episodes: 100

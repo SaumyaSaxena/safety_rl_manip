@@ -1,51 +1,60 @@
 tag: ${now:%Y-%m-%d-%H-%M-%S}
 debug: True # TODO: always true since we are not using wandb during eval
+prefix: '12obj_LessCrowding'
+seeds: [20, 0, 45]
 
 eval_cfg:
   gpu: 1
   seed: 20
   wandb_load:
-    # run_path: iam-lab/safety_rl_manip/gncqv0nb # 1obj, Lagrange, hard target
-    # file: model/step_103999_test_return_-14.21_succRate_0.48.pth
-    # run_path: iam-lab/safety_rl_manip/jtb13ms1 # 1objs, RA, hard target
-    # file: model/step_295999_test_return_-9.34_succRate_1.00.pth
-    # run_path: iam-lab/safety_rl_manip/72hhcoxk # 2objs, Lagrange, hard target
-    # file: model/step_175999_test_return_-29.55_succRate_0.37.pth # updated
-    # run_path: iam-lab/safety_rl_manip/edru5vc7 # 2objs, RA, hard target, no crowd
-    # file: model/step_703999_test_return_-9.73_succRate_0.95.pth
-    # run_path: iam-lab/safety_rl_manip/czrxc6jq # 2objs, RA, hard target
-    # file: model/step_879999_test_return_-9.37_succRate_0.91.pth
-    # run_path: iam-lab/safety_rl_manip/tcf4qo46 # 3objs, Lagrange, hard target
-    # file: model/step_1047999_test_return_-15.71_succRate_0.31.pth
-    # run_path: iam-lab/safety_rl_manip/m2egn02k # 3objs, RA, hard target, no crowd
-    # file: model/step_2991999_test_return_-9.40_succRate_0.87.pth
-    # run_path: iam-lab/safety_rl_manip/egwcp2bc # 4objs, Lagrange, hard target
-    # file: model/step_1751999_test_return_-15.09_succRate_0.26.pth
-    # run_path: iam-lab/safety_rl_manip/vp107hmg # 4objs, RA, hard target
-    # file: model/step_2207999_test_return_-9.32_succRate_0.78.pth
-    # run_path: iam-lab/safety_rl_manip/2qh3cuf7 # 5objs, Lagrange, hard target
-    # file: model/step_727999_test_return_-23.15_succRate_0.32.pth
-    # run_path: iam-lab/safety_rl_manip/003xmffk # 5objs, RA, hard target
-    # file: model/step_1855999_test_return_-9.26_succRate_0.63.pth
-    # run_path: iam-lab/safety_rl_manip/tagf1f0y # 6objs, Lagrange, hard target
-    # file: model/step_1079999_test_return_-12.89_succRate_0.18.pth
-    # run_path: iam-lab/safety_rl_manip/31g0yc1v # 6objs, RA. hard target
-    # file: model/step_1015999_test_return_-8.40_succRate_0.45.pth
-    # run_path: iam-lab/safety_rl_manip/07uibxf7 # 2objs, RA, constraint types
-    # file: model/step_2623999_test_return_-10.55_succRate_0.91.pth
-    # run_path: iam-lab/safety_rl_manip/icr8cblt # 3objs, RA, constraint types
-    # file: model/step_2175999_test_return_-12.74_succRate_0.77.pth
-    run_path: iam-lab/safety_rl_manip/8q9jai02
+    project: safety_rl_manip
+    # run_path: iam-lab/safety_rl_manip/8oc8cvgn # 6obj with mask
+    # file: model/step_1615999_test_return_-9.64_succRate_0.85.pth
+    run_path: iam-lab/safety_rl_manip/ix4s2zfn # 6obj without mask
     file: model/step_1615999_test_return_-9.64_succRate_0.85.pth
   eval_value_fn: False
   eval_safe_rollouts: True
   save_rollout_gifs: True
-  num_visualization_rollouts: 5
-  num_eval_episodes: 200
-  top_k: 2
+  num_visualization_rollouts: 10
+  num_eval_episodes: 100
+  top_k: 1
 
 # remove below if using the same env as during training
+env_cfg:
+  n_rel_objs: 12
+  doneType: 'real'
+  less_crowded: True
+  # block_bottom:
+  #   state_ranges: # x, y
+  #     low: [0.4, 0.45] # [0.0, 0.45]
+  #     high: [0.5, 0.75] # [0.5, 0.75]
+  objects:
+    names: ['porcelain_mug', 'blue_mug', 'red_mug', 'supplement0', 'supplement2', 'toy_sheep',  'can', 'blue_mug1', 'red_mug1', 'porcelain_mug1', 'toy_sheep1', 'plant_pot1'] # , 'toy_elephant_small', 'can',  'blue_mug1', 'red_mug1', 'porcelain_mug1', 'toy_sheep1', 'plant_pot1'
+    initial_poses: 
+      - [0.5, 0.4]
+      - [-0.2, 0.85]
+      - [-0.4, 0.4]
+      - [0.5, 0.8]
+      - [0.0, 0.8]
+      - [0.2, 0.8]
+      - [0.2, 0.8]
+      - [0.2, 0.8]
+      - [0.2, 0.8]
+      - [0.2, 0.8]
+      - [0.2, 0.8]
+      - [0.2, 0.8]
+      - [0.2, 0.8]
+      - [0.2, 0.8]
+      - [0.2, 0.8]
+      - [0.2, 0.8]
+      - [0.2, 0.8]
+      - [0.2, 0.8]
+      - [0.2, 0.8]
+      - [0.2, 0.8]
+
 # env_cfg:
-#   n_rel_objs: 6
+#   thresh: 0.005 # 0.01
 #   objects:
-#     names: ['blue_mug', 'porcelain_mug', 'toy_sheep', 'supplement0', 'supplement2', 'red_mug'] #  , 'toy_sheep', 'supplement0'
+#     state_ranges: # x, y
+#       low: [-0.3, 0.3]
+#       high: [0.7, 0.9]

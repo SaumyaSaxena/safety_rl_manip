@@ -495,9 +495,10 @@ class TransformerIndepActorCriticSS(nn.Module):
 
         self.early_q_action_condn = 'early' in ac_kwargs.q_action_condn_type
         self.late_q_action_condn = 'late' in ac_kwargs.q_action_condn_type
-        # self.semantic_condn = 'low_dim_semantic' in list(ac_kwargs.observation_tokenizers.keys())
+
         self.use_q_readout_tokens = ac_kwargs.Q_transformer_kwargs.transformer_output_type == 'cls'
         self.use_pi_readout_tokens = ac_kwargs.pi_transformer_kwargs.transformer_output_type == 'cls'
+
 
         self.num_obs_tokens = self.find_num_obs_tokens(ac_kwargs.observation_tokenizers)
 
@@ -513,6 +514,9 @@ class TransformerIndepActorCriticSS(nn.Module):
 
         # create observation dense layers (tokenizers) for Q network (NOTE: no tokenizers, aussuming all low-dim inputs)
         self.q_observation_tokenizers, self.q_obs_tokenizer_kwargs = self.create_tokenizers(ac_kwargs.observation_tokenizers)
+        self.q_semantic_tokenizers, self.q_semantic_tokenizer_kwargs = self.create_tokenizers(ac_kwargs.get('semantic_tokenizers', None))
+        self.q_semantic_condn = len(self.q_semantic_tokenizer_kwargs) > 0
+
         self.q_position_embs = self.create_pos_embeddings()
 
         # Q conditioning variables 
@@ -529,6 +533,9 @@ class TransformerIndepActorCriticSS(nn.Module):
     def create_pi_network(self, ac_kwargs):
         # create observation tokenizers for pi network
         self.pi_observation_tokenizers, self.pi_obs_tokenizer_kwargs = self.create_tokenizers(ac_kwargs.observation_tokenizers)
+        self.pi_semantic_tokenizers, self.pi_semantic_tokenizer_kwargs = self.create_tokenizers(ac_kwargs.get('semantic_tokenizers', None))
+        self.pi_semantic_condn = len(self.pi_semantic_tokenizer_kwargs) > 0
+
         self.pi_position_embs = self.create_pos_embeddings()
         if self.use_pi_readout_tokens: # Add readout tokens for pi network
             self.readout_pos_emb_pi, self.num_readout_tokens_pi = self.create_readout_embeddings(ac_kwargs.readouts_actor)
@@ -572,13 +579,14 @@ class TransformerIndepActorCriticSS(nn.Module):
     
     def create_tokenizers(self, tokenizer_kwargs):
         tokenizers, kwargs_list = nn.ModuleList(), []
-        for _, kwargs in tokenizer_kwargs.items():
-            if len(kwargs.kwargs.obs_stack_keys) > 0:
-                num_features = self.env_observation_shapes[kwargs.kwargs.obs_stack_keys[0]][-1]
-                tokenizers.append(
-                    mlp([num_features] + list(kwargs.kwargs.hidden_sizes) + [self.token_embedding_size], nn.SiLU, output_activation=nn.SiLU).to(self.device)
-                )
-                kwargs_list.append(kwargs.kwargs)
+        if tokenizer_kwargs is not None:
+            for _, kwargs in tokenizer_kwargs.items():
+                if len(kwargs.kwargs.obs_stack_keys) > 0:
+                    num_features = self.env_observation_shapes[kwargs.kwargs.obs_stack_keys[0]][-1]
+                    tokenizers.append(
+                        mlp([num_features] + list(kwargs.kwargs.hidden_sizes) + [self.token_embedding_size], nn.SiLU, output_activation=nn.SiLU).to(self.device)
+                    )
+                    kwargs_list.append(kwargs.kwargs)
         return tokenizers, kwargs_list
     
     def create_pos_embeddings(self):
@@ -620,7 +628,6 @@ class TransformerIndepActorCriticSS(nn.Module):
             readout_params.append(self.readout_pos_emb_pi)
         for emb in itertools.chain(*readout_params):
             nn.init.normal_(emb.weight)
-        
 
     def get_q_parameters(self):
         params = [self.q_observation_tokenizers.parameters(), self.Q_transformer.parameters(), self.value_head.parameters()]
@@ -628,6 +635,9 @@ class TransformerIndepActorCriticSS(nn.Module):
             params.append(self.q_action_tokenizers.parameters())
         if self.use_q_readout_tokens:
             params.append(self.readout_pos_emb_Q.parameters())
+        if self.q_semantic_condn:
+            params.append(self.q_semantic_tokenizers.parameters())
+
         return itertools.chain(*params)
 
     def freeze_q_params(self):
@@ -642,6 +652,8 @@ class TransformerIndepActorCriticSS(nn.Module):
         params = [self.pi_observation_tokenizers.parameters(), self.pi_transformer.parameters(), self.action_head.parameters()]
         if self.use_pi_readout_tokens:
             params.append(self.readout_pos_emb_pi.parameters())
+        if self.pi_semantic_condn:
+            params.append(self.pi_semantic_tokenizers.parameters())
         return itertools.chain(*params)
     
     
@@ -703,12 +715,17 @@ class TransformerIndepActorCriticSS(nn.Module):
         all_obs_tokens = self.tokenize_inputs(obs, self.pi_observation_tokenizers, self.pi_obs_tokenizer_kwargs)
         all_obs_tokens = self.add_position_embeds(all_obs_tokens, self.pi_position_embs)
 
+        if self.pi_semantic_condn:
+            all_semantic_tokens = self.tokenize_inputs(obs, self.pi_semantic_tokenizers, self.pi_semantic_tokenizer_kwargs)
+            num_semantic_tokens = all_semantic_tokens.shape[2]
+            assert num_semantic_tokens == all_obs_tokens.shape[2], 'Number of semantic tokens not equal to number of observation tokens!'
+
         # get readout tokens
         if self.use_pi_readout_tokens:
             all_readout_tokens, total_readout_tokens = self.get_readout_tokens(self.readout_pos_emb_pi, batch_size, horizon, self.ac_kwargs.readouts_actor)
 
         # Get transformer outputs
-        if self.pi_transformer.attention_type == 'SA':
+        if self.pi_transformer.attention_type == 'SA' or self.pi_transformer.attention_type == 'AdaLN':
             input_tokens = all_obs_tokens
             attention_mask = None
             if self.use_pi_readout_tokens: # tokens are added at the end
@@ -718,12 +735,21 @@ class TransformerIndepActorCriticSS(nn.Module):
             if 'objects_mask' in obs:
                 attention_mask = self.get_full_mask(attention_mask=attention_mask, obs_mask=obs['objects_mask'], num_tokens=input_tokens.shape[2], action_tokens=False)
 
+            condn_tokens = None
+            if self.pi_semantic_condn:
+                all_semantic_tokens_padded = torch.zeros(input_tokens.shape, device=self.device)
+                all_semantic_tokens_padded[:,:,:num_semantic_tokens, :] = all_semantic_tokens
+                condn_tokens = einops.rearrange(
+                    all_semantic_tokens_padded,
+                    "batch horizon n_tokens d -> batch (horizon n_tokens) d",
+                )
+
             input_tokens = einops.rearrange(
                 input_tokens,
                 "batch horizon n_tokens d -> batch (horizon n_tokens) d",
             )
             transformer_outputs, self.pi_attention_weights = self.pi_transformer(
-                input_tokens, cond=None, attention_mask=attention_mask
+                input_tokens, cond=condn_tokens, attention_mask=attention_mask
             )
         elif self.Q_transformer.attention_type == 'CA': # information bottleneck implementation 
             attention_mask = None
@@ -769,7 +795,12 @@ class TransformerIndepActorCriticSS(nn.Module):
 
         all_obs_tokens = self.tokenize_inputs(obs, self.q_observation_tokenizers, self.q_obs_tokenizer_kwargs) # Get tokens for observations
         all_obs_tokens = self.add_position_embeds(all_obs_tokens, self.q_position_embs)
-        
+
+        if self.q_semantic_condn:
+            all_semantic_tokens = self.tokenize_inputs(obs, self.q_semantic_tokenizers, self.q_semantic_tokenizer_kwargs)
+            num_semantic_tokens = all_semantic_tokens.shape[2]
+            assert num_semantic_tokens == all_obs_tokens.shape[2], 'Number of semantic tokens not equal to number of observation tokens!'
+
         # Get tokens for actions
         if self.early_q_action_condn:
             obs['action'] = action
@@ -780,7 +811,7 @@ class TransformerIndepActorCriticSS(nn.Module):
             all_readout_tokens, total_readout_tokens = self.get_readout_tokens(self.readout_pos_emb_Q, batch_size, horizon, self.ac_kwargs.readouts_critic)
         
         # Get transformer outputs
-        if self.Q_transformer.attention_type == 'SA':
+        if self.Q_transformer.attention_type == 'SA' or self.Q_transformer.attention_type == 'AdaLN':
             input_tokens = all_obs_tokens
             attention_mask = None
             if self.early_q_action_condn:
@@ -792,12 +823,21 @@ class TransformerIndepActorCriticSS(nn.Module):
             if 'objects_mask' in obs:
                 attention_mask = self.get_full_mask(attention_mask=attention_mask, obs_mask=obs['objects_mask'], num_tokens=input_tokens.shape[2], action_tokens=self.early_q_action_condn)
 
+            condn_tokens = None
+            if self.q_semantic_condn:
+                all_semantic_tokens_padded = torch.zeros(input_tokens.shape, device=self.device)
+                all_semantic_tokens_padded[:,:,:num_semantic_tokens, :] = all_semantic_tokens
+                condn_tokens = einops.rearrange(
+                    all_semantic_tokens_padded,
+                    "batch horizon n_tokens d -> batch (horizon n_tokens) d",
+                )
+
             input_tokens = einops.rearrange(
                 input_tokens,
                 "batch horizon n_tokens d -> batch (horizon n_tokens) d",
             )
             transformer_outputs, attention_weights = self.Q_transformer(
-                input_tokens, cond=None, attention_mask=attention_mask
+                input_tokens, cond=condn_tokens, attention_mask=attention_mask
             )
         elif self.Q_transformer.attention_type == 'CA': # information bottleneck implementation
             
@@ -824,20 +864,6 @@ class TransformerIndepActorCriticSS(nn.Module):
             transformer_outputs, attention_weights = self.Q_transformer(
                 value_readout_tokens, cond=cond_tokens, attention_mask=attention_mask
             )
-        elif self.Q_transformer.attention_type == 'AdaLN':
-            assert self.early_q_action_condn, 'Nothing to condition on!'
-            input_tokens = einops.rearrange(
-                all_obs_tokens,
-                "batch horizon n_tokens d -> batch (horizon n_tokens) d",
-            )
-            cond_tokens = einops.rearrange(
-                all_action_tokens,
-                "batch horizon n_tokens d -> batch (horizon n_tokens) d",
-            )
-            transformer_outputs, attention_weights = self.Q_transformer(
-                input_tokens, cond=cond_tokens, attention_mask=None
-            )
-            # TODO: figure out how to condition on readout tokens
         else:
             raise NotImplementedError('Attention type not implemented!')
         
@@ -935,6 +961,14 @@ class MLPActorCriticMultimodal(nn.Module):
 
     def get_pi_parameters(self):
         return self.pi.parameters()
+
+    def freeze_q_params(self):
+        for p in self.get_q_parameters():
+            p.requires_grad = False
+    
+    def unfreeze_q_params(self):
+        for p in self.get_q_parameters():
+            p.requires_grad = True
     
     def act(self, obs):
         state = self.stack_multimodal_observations(obs)

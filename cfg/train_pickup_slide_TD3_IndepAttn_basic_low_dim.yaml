@@ -5,7 +5,7 @@ tag: ${now:%Y-%m-%d-%H-%M-%S}
 run_name: "trainSS_TD3_SA_indep_${train_cfg.mode}" 
 # variant: ${train_cfg.warmup_cfg.warmup_type}_UpdatePiType_${train_cfg.warmup_cfg.warmupQ_expert.update_pi_type}
 # variant: 'no_terminal_gammaSch150_lrSch'
-variant: 'mean_sparseMask_scaleRew1000_2attn_NoStack_6obj_64_ALLlr1e4_scaleQ_noDropout_int'
+variant: 'MultiGoal_GoalFree_SA_2attn_mean_lr1e5_scaleRew10_NoStack_6obj_64_noDropout_int'
 
 hydra:
   run:
@@ -36,13 +36,15 @@ envs:
     shape_reward: False
     scaling_target: 1000.0
     scaling_safety: 1000.0
+    reset_grasped: True
     normalize_pos: False
+    multi_goal: True
     n_rel_objs: 6
     tok_k_mask: 3
     objects:
       names: ['porcelain_mug', 'blue_mug', 'red_mug', 'toy_sheep', 'supplement0', 'supplement2'] # 'porcelain_mug', 'blue_mug', 'red_mug', 'toy_sheep', 'supplement0', 'supplement2'
     observations:
-      low_dim: ['robot_state', 'objects_state', 'objects_mask'] # , 'objects_mask'
+      low_dim: ['robot_state', 'objects_state'] # , 'objects_mask', 'objects_semantics'
       rgb: [] # ['rgb_front_cam','rgb_eye_in_hand_cam']
       append_stack_to_robot_state: False
 
@@ -119,11 +121,10 @@ train_cfg:
   policy_delay: 2
   schedule_noise: False
   noise_decay: 0.985
-  num_test_episodes: 20
   max_ep_len: 300
   model_save_freq: 2
   plot_save_freq: 10
-  save_top_k: 5
+  save_top_k: 10
   ac_type: TD3TransformerIndepActorCriticSS # 'MLPActorCritic', 'TD3TransformerIndepActorCriticSS'
   ac_kwargs:
     TD3TransformerIndepActorCriticSS:
@@ -165,6 +166,12 @@ train_cfg:
         low_dim_action:
           kwargs:
             obs_stack_keys: ['action'] # all keys should have same shape
+            hidden_sizes: [64,64]
+          name: IdentityLowdimObsTokenizer
+      semantic_tokenizers:
+        low_dim_sem0:
+          kwargs:
+            obs_stack_keys: [] # 'objects_semantics', all keys should have same shape
             hidden_sizes: [64,64]
           name: IdentityLowdimObsTokenizer
       readouts_actor:
@@ -212,7 +219,7 @@ train_cfg:
         num_layers: 2 #12
         window_size: ${train_cfg.ac_kwargs.TD3TransformerIndepActorCriticSS.window_size}
         token_embedding_size: ${train_cfg.ac_kwargs.TD3TransformerIndepActorCriticSS.token_embedding_size}
-        attention_type: 'SA' # SA, CA
+        attention_type: 'SA' # SA, CA, AdaLN
     MLPActorCritic:
       hidden_sizes: [256,256]
       activation: 'relu'
@@ -225,7 +232,7 @@ eval_cfg:
   seed: ${seed}
   eval_value_fn: False
   test_value_fn: False
-  num_test_episodes: 100
+  num_test_episodes: 80
   eval_safe_rollouts: True
   num_eval_episodes: 5000
   save_rollout_gifs: True

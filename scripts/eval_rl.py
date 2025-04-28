@@ -4,7 +4,7 @@ import torch
 from pathlib import Path
 import logging
 import wandb
-import time
+import time, json
 from omegaconf import OmegaConf
 
 from safety_rl_manip.models.RARL.DDPG import DDPG
@@ -31,6 +31,7 @@ def main():
     time_str = time.strftime("%Y_%m_%d_%H_%M_%S")
     eval_path = Path('outputs/evals')
     model_path = os.path.join(eval_path, 'ckpts')
+    run_id = eval_cfg.wandb_load.run_path.split('/')[-1]
 
     # Load checkpoint
     ckpt_file = wandb.restore(
@@ -52,7 +53,7 @@ def main():
         OmegaConf.set_struct(env_cfg, True)
 
     if 'run_variant' in ckpt['train_cfg']:
-        time_str = time_str + '_' + ckpt['train_cfg']['run_variant'] + '_' + 'evals'
+        time_str = time_str + f'_seed{eval_cfg.seed}' + f'_{run_id}' + f'_{cfg.prefix}_' + ckpt['train_cfg']['run_variant'] + '_' + 'evals'
 
     eval_path = os.path.join(eval_path, f'{env_name}_{algo_name}_{mode}', time_str)
 
@@ -62,6 +63,17 @@ def main():
         outFolder=eval_path, debug=cfg.debug
     )
     agent.eval(ckpt, eval_cfg=eval_cfg)
+
+    fname = os.path.join(agent.outFolder, 'results_rollouts.json')
+    with open(fname, 'r') as f:
+        eval_results = json.load(f)
+
+    eval_results['run_path'] = eval_cfg.wandb_load.run_path
+    eval_results['checkpoint_name'] = ckpt_file.name
+    eval_results['seed'] = eval_cfg.seed
+    with open(fname, "w") as f:
+        json.dump(eval_results, f, indent=4)
+    
 
 if __name__ == "__main__":
     main()

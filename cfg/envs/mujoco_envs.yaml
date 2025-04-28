@@ -137,7 +137,7 @@ slide_pickup_clutter_mujoco_env-v0:
   use_constraint_types: False
   normalize_pos: False
   normalize_vel: False
-  constraint_types: ['soft_contact', 'no_contact'] # when use_constraint_types=True, constraint types sampled from here during training 
+  constraint_types: ['soft_contact', 'no_contact', 'any_contact'] # when use_constraint_types=True, constraint types sampled from here during training 
   obj_to_constraint_map: # when use_constraint_types=True, not used during training
     toy_squirrel: 'no_contact'
     toy_sheep: 'no_contact'
@@ -162,7 +162,7 @@ slide_pickup_clutter_mujoco_env-v0:
   num_eval_trajs: 20
   n_rel_objs: 3
   action_scale: [0.02, 0.02, 0.02] # [0.02, 0.02, 0.02]
-  robot_base_pos: [0, 0.0,0.0]
+  robot_base_pos: [0.0, 0.0, 0.0]
   init_arm_qpos: [1.5,0,0,-1.5,0.0,1.5,0.0] #[1.52613082e+00,  1.86419679e-01,  4.72079341e-02, -1.91944351e+00, -1.01665263e-02,  2.10563729e+00,  2.89773222e+00] # [1.5,0,0,-1.5,0.0,1.5,0.0]
   init_wrist_qpos: [0.0]
   init_fingers_qpos: [0.020833, -0.020833]
@@ -177,6 +177,7 @@ slide_pickup_clutter_mujoco_env-v0:
   randomize_locations: True
   reset_grasped: True
   reset_uncrowded: True
+  less_crowded: False
   block_bottom:
     block_name: 'orange_cereal_pack' # 'red_lunch_pack' # 'block_bottom', 'orange_cereal_pack', purple_lego_set
     mass: 0.5
@@ -225,6 +226,10 @@ slide_pickup_clutter_mujoco_env-v0:
       - [0.2, 0.8]
       - [0.2, 0.8]
       - [0.2, 0.8]
+      - [0.2, 0.8]
+      - [0.2, 0.8]
+      - [0.2, 0.8]
+      - [0.2, 0.8]
     N_x: [50, 50]
   penalty: 10.
   reward: -10.
@@ -239,28 +244,35 @@ slide_pickup_clutter_mujoco_env-v0:
 
 
 slide_pickup_clutter_mujoco_multimodal_env-v0:
-  n_rel_objs: 4
+  n_rel_objs: 3
   tok_k_mask: 2
+  multi_goal: True
   normalize_pos: False
   normalize_vel: False
   constraint_type_repr: 'int' # 'int', 'one_hot'
   use_constraint_types: True # Always set to True since we are appending object/constraint types to object states 
-  constraint_types: ['no_contact'] # when use_constraint_types=True, constraint types sampled from here during training; ['soft_contact', 'no_contact']
-  obj_to_constraint_map: # when use_constraint_types=True, not used during training
+  constraint_types: ['no_contact', 'soft_contact', 'any_contact', 'no_over'] # when use_constraint_types=True, constraint types sampled from here during training; ['soft_contact', 'no_contact']
+  randomize_constraint_types: True
+  obj_to_constraint_map: # when use_constraint_types=True, not used during training if randomize_constraint_types=True
     toy_squirrel: 'no_contact'
     toy_sheep: 'no_contact'
     blue_mug: 'no_contact'
     porcelain_mug: 'no_contact'
     red_mug: 'no_contact'
+    red_mug1: 'no_contact'
     toy_elephant: 'no_contact'
+    toy_elephant_small: 'no_contact'
     toy_dog: 'no_contact'
     supplement0: 'no_contact'
     supplement2: 'no_contact'
     toy_android: 'no_contact'
     plant_pot: 'no_contact'
     porcelain_teapot: 'no_contact'
+    milk_carton: 'no_contact'
+    can: 'no_contact'
+    bottle: 'no_contact'
   vel_thresh: 1.0
-  thresh: 0.01
+  thresh: 0.005 # 0.01
   toppl_thresh: 15
   frame_skip: 5
   img_size: [256, 256]
@@ -269,7 +281,7 @@ slide_pickup_clutter_mujoco_multimodal_env-v0:
   control_high: [1.,1.,1.]
   num_eval_trajs: 20
   action_scale: [0.02, 0.02, 0.02] # [0.02, 0.02, 0.02]
-  robot_base_pos: [0, 0.0,0.0]
+  robot_base_pos: [0.0, 0.1,0.0]
   init_arm_qpos: [1.5,0,0,-1.5,0.0,1.5,0.0] #[1.52613082e+00,  1.86419679e-01,  4.72079341e-02, -1.91944351e+00, -1.01665263e-02,  2.10563729e+00,  2.89773222e+00] # [1.5,0,0,-1.5,0.0,1.5,0.0]
   init_wrist_qpos: [0.0]
   init_fingers_qpos: [0.020833, -0.020833]
@@ -296,11 +308,20 @@ slide_pickup_clutter_mujoco_multimodal_env-v0:
     target_set:
       # low: [-5.0, -0.3, -0.5] # added to initial bottom block state to get target boundary low [-0.1, -0.1, -0.1]
       # high: [-0.25, 0.3, 0.5] # added to initial bottom block state to get target boundary high [0.1, 0.1, 0.1]
-      low: [-0.7, 0.2, -0.0] # absolute 0.06-0.07
-      high: [-0.3, 0.99, 0.12] # absolute 0.06+0.07
+      low: [-0.7, 0.2, -0.01] # absolute 0.06-0.07
+      high: [-0.3, 0.99, 0.13] # absolute 0.06+0.07
+    multi_goal_target_sets:
+      target_set0:
+        low: [-0.7, 0.2, -0.01] # absolute 0.06-0.07
+        high: [-0.3, 0.595, 0.13] # absolute 0.06+0.07
+        rgba: [0, 1, 0, 0.2]
+      target_set1:
+        low: [-0.7, 0.595, -0.01] # absolute 0.06-0.07
+        high: [-0.3, 0.99, 0.13] # absolute 0.06+0.07
+        rgba: [0, 0, 1, 0.2]
     state_ranges: # x, y
-      low: [0.0, 0.45] 
-      high: [0.5, 0.75]
+      low: [0.0, 0.45] # [0.0, 0.45]
+      high: [0.5, 0.75] # [0.5, 0.75]
     N_x: [50, 50]
   block_top:
     block_name: 'blue_cereal_pack' # 'blue_lunch_pack' # 'block_top', 'blue_cereal_pack', yellow_lego_set
@@ -318,9 +339,12 @@ slide_pickup_clutter_mujoco_multimodal_env-v0:
       low: [0.03, -0.00] # relative to block_bottom
       high: [0.04, 0.00] # relative to block_bottom
   objects:
-    names: ['porcelain_mug', 'blue_mug', 'red_mug', 'supplement0'] # 'toy_squirrel', 'toy_sheep', 'porcelain_mug', 'blue_mug', 'red_mug', 'supplement0'
+    names: ['porcelain_mug', 'toy_squirrel', 'toy_sheep'] # 'toy_squirrel', 'toy_sheep', 'porcelain_mug', 'blue_mug', 'red_mug', 'supplement0'
     state_ranges: # x, y
-      low: [-0.55, 0.3]
+      low: [-0.65, 0.3]
+      high: [0.7, 0.9]
+    state_ranges_single_goal: # x, y
+      low: [-0.3, 0.3]
       high: [0.7, 0.9]
     initial_poses: 
       - [0.5, 0.4]
@@ -328,6 +352,145 @@ slide_pickup_clutter_mujoco_multimodal_env-v0:
       - [-0.4, 0.4]
       - [0.5, 0.8]
       - [0.0, 0.8]
+      - [0.2, 0.8]
+      - [0.2, 0.8]
+      - [0.2, 0.8]
+      - [0.2, 0.8]
+      - [0.2, 0.8]
+      - [0.2, 0.8]
+      - [0.2, 0.8]
+      - [0.2, 0.8]
+      - [0.2, 0.8]
+    N_x: [50, 50]
+  observations:
+    low_dim: ['robot_state', 'objects_state', 'objects_mask']
+    rgb: ['rgb_front_cam']
+    append_stack_to_robot_state: False
+  penalty: 10.
+  reward: -10.
+  shape_reward: False
+  costType: 'max_ell_g'
+  scaling_target: 1.0
+  scaling_safety: 1.0
+  return_type: 'reward'
+  mode: 'lagrange'
+  doneType: 'all' # 'all', 'real'
+  is_GT_value: False
+
+FrankaReal_slide_pickup_clutter_mujoco_multimodal_env-v0:
+  n_rel_objs: 6
+  tok_k_mask: 3
+  multi_goal: False
+  normalize_pos: True
+  normalize_vel: False
+  constraint_type_repr: 'int' # 'int', 'one_hot'
+  use_constraint_types: True # Always set to True since we are appending object/constraint types to object states 
+  constraint_types: ['no_contact', 'soft_contact', 'any_contact', 'no_over'] # when use_constraint_types=True, constraint types sampled from here during training; ['soft_contact', 'no_contact']
+  randomize_constraint_types: True
+  obj_to_constraint_map: # when use_constraint_types=True, not used during training if randomize_constraint_types=True
+    toy_squirrel: 'no_contact'
+    toy_sheep: 'no_contact'
+    blue_mug: 'no_contact'
+    porcelain_mug: 'no_contact'
+    red_mug: 'no_contact'
+    red_mug1: 'no_contact'
+    toy_elephant: 'no_contact'
+    toy_elephant_small: 'no_contact'
+    toy_dog: 'no_contact'
+    supplement0: 'no_contact'
+    supplement2: 'no_contact'
+    toy_android: 'no_contact'
+    plant_pot: 'no_contact'
+    porcelain_teapot: 'no_contact'
+    milk_carton: 'no_contact'
+    can: 'no_contact'
+    bottle: 'no_contact'
+  vel_thresh: 1.0
+  thresh: 0.005 # 0.01
+  toppl_thresh: 15
+  frame_skip: 5
+  img_size: [256, 256]
+  goal: [0.6, 0.6, 0.5]
+  control_low: [-1.,-1.,-1.]
+  control_high: [1.,1.,1.]
+  num_eval_trajs: 20
+  action_scale: [0.02, 0.02, 0.02] # [0.02, 0.02, 0.02]
+  robot_base_pos: [0.0, 0.1,0.0]
+  init_arm_qpos: [1.5,0,0,-1.5,0.0,1.5,0.0] #[1.52613082e+00,  1.86419679e-01,  4.72079341e-02, -1.91944351e+00, -1.01665263e-02,  2.10563729e+00,  2.89773222e+00] # [1.5,0,0,-1.5,0.0,1.5,0.0]
+  init_wrist_qpos: [0.0]
+  init_fingers_qpos: [0.020833, -0.020833]
+  hand_init_pos: [0, 0.6, 0.3]
+  mocap_low: [-0.5, 0.3, 0.06]
+  mocap_high: [0.5, 0.8, 0.6]
+  mocap_quat: [0.707107, 0, 0, 0.707107] # [1, 0, 0, 0] ; [0.707107, 0, 0, 0.707107]
+  gravity_compensation: True
+  env_bounds:
+    low: [-0.69, 0.2, -0.2] #table bounds : table center is [0., 0.6]
+    high: [0.69, 0.99, 1.0] #table bounds
+  randomize_locations: True
+  reset_grasped: True
+  reset_uncrowded: True
+  block_bottom:
+    block_name: 'orange_cereal_pack' # 'red_lunch_pack' # 'block_bottom', 'orange_cereal_pack', purple_lego_set
+    mass: 0.5
+    initial_pos: [0.3, 0.6]
+    size: [0.1, 0.1, 0.03] # half-dimensions
+    rgba: [0, 1, 0, 1]
+    friction: 0.2
+    restitution: 0.0 # 0.99 bouncy
+    target_set_type: 'absolute' # 'absolute', 'relative'
+    target_set:
+      # low: [-5.0, -0.3, -0.5] # added to initial bottom block state to get target boundary low [-0.1, -0.1, -0.1]
+      # high: [-0.25, 0.3, 0.5] # added to initial bottom block state to get target boundary high [0.1, 0.1, 0.1]
+      low: [-0.7, 0.2, -0.01] # absolute 0.06-0.07
+      high: [-0.3, 0.99, 0.13] # absolute 0.06+0.07
+    multi_goal_target_sets:
+      target_set0:
+        low: [-0.7, 0.2, -0.01] # absolute 0.06-0.07
+        high: [-0.3, 0.595, 0.13] # absolute 0.06+0.07
+        rgba: [0, 1, 0, 0.2]
+      target_set1:
+        low: [-0.7, 0.595, -0.01] # absolute 0.06-0.07
+        high: [-0.3, 0.99, 0.13] # absolute 0.06+0.07
+        rgba: [0, 0, 1, 0.2]
+    state_ranges: # x, y
+      low: [0.0, 0.45] # [0.0, 0.45]
+      high: [0.5, 0.75] # [0.5, 0.75]
+    N_x: [50, 50]
+  block_top:
+    block_name: 'blue_cereal_pack' # 'blue_lunch_pack' # 'block_top', 'blue_cereal_pack', yellow_lego_set
+    mass: 0.5
+    initial_pos: [0.36, 0.6]
+    size: [0.1, 0.1, 0.03] # half-dimensions
+    rgba: [1, 0, 0, 1]
+    friction: 0.2
+    restitution: 0.0
+    safety_set:
+      low: [-0.2, -0.2, -1.0] # added from initial block state to get safety boundary
+      high: [0.2, 0.2, 0.025] # added to initial block state to get safety boundary
+    N_x: [50, 50]
+    state_ranges: # x, y
+      low: [0.03, -0.00] # relative to block_bottom
+      high: [0.04, 0.00] # relative to block_bottom
+  objects:
+    names: ['porcelain_mug', 'toy_squirrel', 'toy_sheep'] # 'toy_squirrel', 'toy_sheep', 'porcelain_mug', 'blue_mug', 'red_mug', 'supplement0'
+    state_ranges: # x, y
+      low: [-0.65, 0.3]
+      high: [0.7, 0.9]
+    state_ranges_single_goal: # x, y
+      low: [-0.3, 0.3]
+      high: [0.7, 0.9]
+    initial_poses: 
+      - [0.5, 0.4]
+      - [-0.2, 0.85]
+      - [-0.4, 0.4]
+      - [0.5, 0.8]
+      - [0.0, 0.8]
+      - [0.2, 0.8]
+      - [0.2, 0.8]
+      - [0.2, 0.8]
+      - [0.2, 0.8]
+      - [0.2, 0.8]
       - [0.2, 0.8]
       - [0.2, 0.8]
       - [0.2, 0.8]

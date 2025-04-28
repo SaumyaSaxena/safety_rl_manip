@@ -2,10 +2,11 @@ debug: False
 gpu: 0
 seed: 0
 tag: ${now:%Y-%m-%d-%H-%M-%S}
-run_name: "train_SS_DDPG_CA_indep_${train_cfg.mode}" 
+run_name: "trainSS_DDPG_SA_indep_${train_cfg.mode}" 
 # variant: ${train_cfg.warmup_cfg.warmup_type}_UpdatePiType_${train_cfg.warmup_cfg.warmupQ_expert.update_pi_type}
 # variant: 'no_terminal_gammaSch150_lrSch'
-variant: 'CAreadout_lr1e4_sparseMask_scaleRew1000_NoStack_6obj_64_noDropout_int'
+# variant: 'NormState_6obj_Mask_MultiGoal_Clip5_2attn_mean_lr1e4_scaleRew1000_NoStack_64_noDropout_int'
+variant: '6obj_Clip5_2attn_mean_lr1e4_scaleRew1000_NoStack_64_noDropout_int'
 
 hydra:
   run:
@@ -36,13 +37,25 @@ envs:
     shape_reward: False
     scaling_target: 1000.0
     scaling_safety: 1000.0
-    normalize_pos: False
+    reset_grasped: True
+    normalize_pos: True
+    less_crowded: False
+    multi_goal: False
     n_rel_objs: 6
     tok_k_mask: 3
     objects:
       names: ['porcelain_mug', 'blue_mug', 'red_mug', 'toy_sheep', 'supplement0', 'supplement2'] # 'porcelain_mug', 'blue_mug', 'red_mug', 'toy_sheep', 'supplement0', 'supplement2'
+    constraint_types: ['no_contact'] # , 'soft_contact', 'any_contact', 'no_over'; used when randomize_constraint_types=True
+    randomize_constraint_types: True
+    obj_to_constraint_map: # used when randomize_constraint_types=False
+      porcelain_mug: 'no_contact'
+      blue_mug: 'no_contact'
+      red_mug: 'soft_contact'
+      toy_sheep: 'soft_contact'
+      supplement0: 'no_over'
+      supplement2: 'any_contact'
     observations:
-      low_dim: ['robot_state', 'objects_state', 'objects_mask'] # , 'objects_mask'
+      low_dim: ['robot_state', 'objects_state'] # , 'objects_mask', 'objects_semantics'
       rgb: [] # ['rgb_front_cam','rgb_eye_in_hand_cam']
       append_stack_to_robot_state: False
 
@@ -68,7 +81,7 @@ train_cfg:
   add_expert_to_buffer: False
   expert_data_loc: '/home/saumyas/Projects/safe_control/HJR_manip/outputs/DoubleIntegrator/goto_goal_datasets/data_DoubleIntegrator_goto_goal_N_620.pkl'
   expert_data_frac: 0.75
-  mode: 'RA' # RA, lagrange
+  mode: 'lagrange' # RA, lagrange
   seed: ${seed}
   steps_per_epoch: 4000 # 4000
   epochs: 1200
@@ -79,8 +92,8 @@ train_cfg:
   scale_q_loss: 1000.0
   polyak: 0.995
   optimizer:
-    pi_lr: 1e-4
-    q_lr: 1e-4
+    pi_lr: 1.0e-4
+    q_lr: 1.0e-4
     clip_grad_norm: 5.0
     AdamW:
       eps: 1.0e-8
@@ -162,6 +175,12 @@ train_cfg:
             obs_stack_keys: ['action'] # all keys should have same shape
             hidden_sizes: [64,64]
           name: IdentityLowdimObsTokenizer
+      semantic_tokenizers:
+        low_dim_sem0:
+          kwargs:
+            obs_stack_keys: [] # 'objects_semantics', all keys should have same shape
+            hidden_sizes: [64,64]
+          name: IdentityLowdimObsTokenizer
       readouts_actor:
         action: 1
       readouts_critic:
@@ -188,7 +207,7 @@ train_cfg:
           name: ValueHead
       Q_transformer_kwargs:
         add_position_embedding: False
-        transformer_output_type: 'cls' # 'mean', 'cls'
+        transformer_output_type: 'mean' # 'mean', 'cls'
         attention_dropout_rate: 0.0
         dropout_rate: 0.0
         mlp_dim: 256 # around 4 times the token_embedding_size
@@ -196,10 +215,10 @@ train_cfg:
         num_layers: 2 #12
         window_size: ${train_cfg.ac_kwargs.TransformerIndepActorCriticSS.window_size}
         token_embedding_size: ${train_cfg.ac_kwargs.TransformerIndepActorCriticSS.token_embedding_size}
-        attention_type: 'CA' # SA, CA, AdaLN
+        attention_type: 'SA' # SA, CA, AdaLN
       pi_transformer_kwargs:
         add_position_embedding: False
-        transformer_output_type: 'cls' # 'mean', 'cls'
+        transformer_output_type: 'mean' # 'mean', 'cls'
         attention_dropout_rate: 0.0
         dropout_rate: 0.0
         mlp_dim: 256 # around 4 times the token_embedding_size
@@ -207,7 +226,7 @@ train_cfg:
         num_layers: 2 #12
         window_size: ${train_cfg.ac_kwargs.TransformerIndepActorCriticSS.window_size}
         token_embedding_size: ${train_cfg.ac_kwargs.TransformerIndepActorCriticSS.token_embedding_size}
-        attention_type: 'CA' # SA, CA
+        attention_type: 'SA' # SA, CA, AdaLN
     MLPActorCritic:
       hidden_sizes: [256,256]
       activation: 'relu'
@@ -218,9 +237,10 @@ train_cfg:
 
 eval_cfg:
   seed: ${seed}
+  async_eval: False # check
   eval_value_fn: False
   test_value_fn: False
-  num_test_episodes: 100
+  num_test_episodes: 80
   eval_safe_rollouts: True
   num_eval_episodes: 5000
   save_rollout_gifs: True

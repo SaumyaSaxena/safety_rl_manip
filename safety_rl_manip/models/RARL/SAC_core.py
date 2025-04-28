@@ -443,9 +443,12 @@ class SACTransformerIndepActorCriticSS(TransformerIndepActorCriticSS):
         # create observation dense layers (tokenizers) for Q network (NOTE: no tokenizers, aussuming all low-dim inputs)
         self.q1_observation_tokenizers, self.q1_obs_tokenizer_kwargs = self.create_tokenizers(ac_kwargs.observation_tokenizers)
         self.q1_position_embs = self.create_pos_embeddings()
+        self.q1_semantic_tokenizers, self.q1_semantic_tokenizer_kwargs = self.create_tokenizers(ac_kwargs.get('semantic_tokenizers', None))
+        self.q_semantic_condn = len(self.q1_semantic_tokenizer_kwargs) > 0
 
         self.q2_observation_tokenizers, self.q2_obs_tokenizer_kwargs = self.create_tokenizers(ac_kwargs.observation_tokenizers)
         self.q2_position_embs = self.create_pos_embeddings()
+        self.q2_semantic_tokenizers, self.q2_semantic_tokenizer_kwargs = self.create_tokenizers(ac_kwargs.get('semantic_tokenizers', None))
         
         # Q conditioning variables 
         if self.early_q_action_condn: # only use actions for conditioning
@@ -501,6 +504,8 @@ class SACTransformerIndepActorCriticSS(TransformerIndepActorCriticSS):
             params.append(self.q1_action_tokenizers.parameters())
         if self.use_q_readout_tokens:
             params.append(self.readout_pos_emb_Q1.parameters())
+        if self.q_semantic_condn:
+            params.append(self.q1_semantic_tokenizers.parameters())
         return itertools.chain(*params)
     
     def get_q2_parameters(self):
@@ -509,11 +514,12 @@ class SACTransformerIndepActorCriticSS(TransformerIndepActorCriticSS):
             params.append(self.q2_action_tokenizers.parameters())
         if self.use_q_readout_tokens:
             params.append(self.readout_pos_emb_Q2.parameters())
+        if self.q_semantic_condn:
+            params.append(self.q2_semantic_tokenizers.parameters())
         return itertools.chain(*params)
 
     def get_q_parameters(self):
         return itertools.chain(self.get_q1_parameters(), self.get_q2_parameters())
-
 
     def _forward_value(
         self, 
@@ -524,47 +530,38 @@ class SACTransformerIndepActorCriticSS(TransformerIndepActorCriticSS):
     ):
         batch_size, horizon  = obs[list(obs.keys())[0]].shape[:2]
         if value_idx == 1:
-            q_observation_tokenizers = self.q1_observation_tokenizers
-            q_obs_tokenizer_kwargs = self.q1_obs_tokenizer_kwargs
             Q_transformer = self.Q1_transformer
             value_head = self.value_head1
-            position_embs = self.q1_position_embs
+            all_obs_tokens = self.tokenize_inputs(obs, self.q1_observation_tokenizers, self.q1_obs_tokenizer_kwargs) # Get tokens for observations
+            all_obs_tokens = self.add_position_embeds(all_obs_tokens, self.q1_position_embs)
+            if self.q_semantic_condn:
+                all_semantic_tokens = self.tokenize_inputs(obs, self.q1_semantic_tokenizers, self.q1_semantic_tokenizer_kwargs)
+            if self.early_q_action_condn:
+                obs['action'] = action
+                all_action_tokens = self.tokenize_inputs(obs, self.q1_action_tokenizers, self.q1_action_tokenizer_kwargs)
+            if self.use_q_readout_tokens:
+                all_readout_tokens, total_readout_tokens = self.get_readout_tokens(self.readout_pos_emb_Q1, batch_size, horizon, self.ac_kwargs.readouts_critic)
         elif value_idx == 2:
-            q_observation_tokenizers = self.q2_observation_tokenizers
-            q_obs_tokenizer_kwargs = self.q2_obs_tokenizer_kwargs
             Q_transformer = self.Q2_transformer
             value_head = self.value_head2
-            position_embs = self.q2_position_embs
+            all_obs_tokens = self.tokenize_inputs(obs, self.q2_observation_tokenizers, self.q2_obs_tokenizer_kwargs) # Get tokens for observations
+            all_obs_tokens = self.add_position_embeds(all_obs_tokens, self.q2_position_embs)
+            if self.q_semantic_condn:
+                all_semantic_tokens = self.tokenize_inputs(obs, self.q2_semantic_tokenizers, self.q2_semantic_tokenizer_kwargs)
+            if self.early_q_action_condn:
+                obs['action'] = action
+                all_action_tokens = self.tokenize_inputs(obs, self.q2_action_tokenizers, self.q2_action_tokenizer_kwargs)
+            if self.use_q_readout_tokens:
+                all_readout_tokens, total_readout_tokens = self.get_readout_tokens(self.readout_pos_emb_Q2, batch_size, horizon, self.ac_kwargs.readouts_critic)
         else:
             raise NotImplementedError('value_idx invalid!')
-        all_obs_tokens = self.tokenize_inputs(obs, q_observation_tokenizers, q_obs_tokenizer_kwargs) # Get tokens for observations
-        all_obs_tokens = self.add_position_embeds(all_obs_tokens, position_embs)
 
-        # Get tokens for actions
-        if self.early_q_action_condn:
-            obs['action'] = action
-            if value_idx == 1:
-                q_action_tokenizers = self.q1_action_tokenizers
-                q_action_tokenizer_kwargs = self.q1_action_tokenizer_kwargs
-            elif value_idx == 2:
-                q_action_tokenizers = self.q2_action_tokenizers
-                q_action_tokenizer_kwargs = self.q2_action_tokenizer_kwargs
-            else:
-                raise NotImplementedError('value_idx invalid!')
-            all_action_tokens = self.tokenize_inputs(obs, q_action_tokenizers, q_action_tokenizer_kwargs)
-
-        # get readout tokens
-        if self.use_q_readout_tokens:
-            if value_idx == 1:
-                readout_pos_emb_Q = self.readout_pos_emb_Q1
-            elif value_idx == 2:
-                readout_pos_emb_Q = self.readout_pos_emb_Q2
-            else:
-                raise NotImplementedError('value_idx invalid!')
-            all_readout_tokens, total_readout_tokens = self.get_readout_tokens(readout_pos_emb_Q, batch_size, horizon, self.ac_kwargs.readouts_critic)
+        if self.q_semantic_condn:
+            num_semantic_tokens = all_semantic_tokens.shape[2]
+            assert num_semantic_tokens == all_obs_tokens.shape[2], 'Number of semantic tokens not equal to number of observation tokens!'
 
         # Get transformer outputs
-        if Q_transformer.attention_type == 'SA':
+        if Q_transformer.attention_type == 'SA' or self.Q_transformer.attention_type == 'AdaLN':
             input_tokens = all_obs_tokens
             attention_mask = None
             if self.early_q_action_condn:
@@ -575,15 +572,24 @@ class SACTransformerIndepActorCriticSS(TransformerIndepActorCriticSS):
             
             if 'objects_mask' in obs:
                 attention_mask = self.get_full_mask(attention_mask=attention_mask, obs_mask=obs['objects_mask'], num_tokens=input_tokens.shape[2], action_tokens=self.early_q_action_condn)
+            
+            condn_tokens = None
+            if self.q_semantic_condn:
+                all_semantic_tokens_padded = torch.zeros(input_tokens.shape, device=self.device)
+                all_semantic_tokens_padded[:,:,:num_semantic_tokens, :] = all_semantic_tokens
+                condn_tokens = einops.rearrange(
+                    all_semantic_tokens_padded,
+                    "batch horizon n_tokens d -> batch (horizon n_tokens) d",
+                )
 
             input_tokens = einops.rearrange(
                 input_tokens,
                 "batch horizon n_tokens d -> batch (horizon n_tokens) d",
             )
             transformer_outputs, attention_weights = Q_transformer(
-                input_tokens, cond=None, attention_mask=None
+                input_tokens, cond=condn_tokens, attention_mask=attention_mask
             )
-        elif Q_transformer.attention_type == 'AdaLN' or Q_transformer.attention_type == 'CA':
+        elif Q_transformer.attention_type == 'CA':
             assert self.early_q_action_condn, 'Nothing to condition on!'
             input_tokens = einops.rearrange(
                 all_obs_tokens,

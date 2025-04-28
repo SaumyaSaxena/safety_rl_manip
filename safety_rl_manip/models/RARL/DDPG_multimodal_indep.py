@@ -49,6 +49,7 @@ class DDPGMultimodalIndep(torch.nn.Module):
         self.plot_save_freq = train_cfg.plot_save_freq
         self.warmup = train_cfg.warmup
         self.warmup_cfg = train_cfg.warmup_cfg
+        self.async_eval = eval_cfg.get('async_eval', False)
 
         # Gamma scheduler
         if train_cfg.schedule_gamma:
@@ -124,10 +125,7 @@ class DDPGMultimodalIndep(torch.nn.Module):
             q_pi_targ = self.ac_targ.value(o2)['q_policy']
             if self.mode == 'RA':
                 backup = torch.zeros(q.shape).float().to(self.device)
-                non_terminal = torch.min(
-                    gx,
-                    torch.max(lx, q_pi_targ),
-                )
+                non_terminal = torch.min(gx, torch.max(lx, q_pi_targ))
                 terminal = torch.min(lx, gx)
                 backup = non_terminal * self.gamma + terminal * (1 - self.gamma)
             else:
@@ -371,17 +369,22 @@ class DDPGMultimodalIndep(torch.nn.Module):
                 print(f"Testing at epoch: {epoch}")
 
                 start = time.time()
-                test_info = self.test_agent(epoch)
-                print(f"time for testing: {time.time()-start}")
+                if not self.async_eval:
+                    test_info = self.test_agent(epoch)
+                    print(f"time for testing: {time.time()-start}")
 
-                avg_test_return = test_info['Average_return']
-                success_rate = test_info['success_rate']
+                    avg_test_return = test_info['Average_return']
+                    success_rate = test_info['success_rate']
 
                 # Save model
                 if (epoch % self.model_save_freq == 0) or (epoch == self.epochs):
                     print(f"Saving model at epoch: {epoch}")
-                    save_file_name = os.path.join(self.modelFolder, f"step_{t}_test_return_{avg_test_return:.2f}_succRate_{success_rate:.2f}.pth")
-                    status = self.topk_logger.push(save_file_name, success_rate)
+                    if self.async_eval:
+                        save_file_name = os.path.join(self.modelFolder, f"step_{t}_epoch_{epoch}.pth")
+                        status = True # ssave all checkpoints
+                    else:
+                        save_file_name = os.path.join(self.modelFolder, f"step_{t}_test_return_{avg_test_return:.2f}_succRate_{success_rate:.2f}.pth")
+                        status = self.topk_logger.push(save_file_name, success_rate)
                     if status:
                         start = time.time()
                         torch.save(
@@ -406,7 +409,8 @@ class DDPGMultimodalIndep(torch.nn.Module):
                         log_dict.update({f'Time': time.time()-start_time})
                         log_dict.update({'optim/q_lr': self.ac.q_optimizer.param_groups[0]['lr']})
                         log_dict.update({'optim/pi_lr': self.ac.pi_optimizer.param_groups[0]['lr']})
-                        log_dict.update(test_info)
+                        if not self.async_eval:
+                            log_dict.update(test_info)
             if not self.debug:
                 wandb.log(log_dict, step=t)
             
@@ -464,7 +468,7 @@ class DDPGMultimodalIndep(torch.nn.Module):
                 ep_len += 1
             trajs.append(np.array(rollout))
             if save_rollout_gifs:
-                file_name = f'eval_traj_{self.mode}_{len(trajs)}_pred_succ_{pred_success}_gt_succ_{gt_success}_{self.test_env.failure_mode}'
+                file_name = f'eval_traj_{self.mode}_{len(trajs)}_pred_succ_{pred_success}_gt_succ_{gt_success}_goal_{self.test_env.target_set_name}_{self.test_env.failure_mode}_{self.test_env.colliding_obj_name}'
                 imageio.mimsave(os.path.join(self.figureFolder, f'{file_name}.gif'), 
                     imgs, duration=ep_len*self.test_env.dt)
                 self.test_env.plot_trajectory(rollout, np.stack(at_all,axis=0), os.path.join(self.figureFolder, f'{file_name}.png'))
@@ -591,6 +595,7 @@ class DDPGMultimodalIndep(torch.nn.Module):
             false_pos_rate = eval_results['False_positive_rate']
             false_neg_rate = eval_results['False_negative_rate']
             print(f"Saving rollouts FPR={false_pos_rate}; FNR={false_neg_rate} results to: {str(fname)}")
+            return eval_results
 
         if not debug:
             wandb.run.summary["FPR"] = false_pos_rate

@@ -43,6 +43,9 @@ class SlidePickupClutterMujocoMultimodalEnv(gym.Env, EzPickle):
         self.constraint_type_repr = self.env_cfg.get('constraint_type_repr', 'int')
         self.append_stack_to_robot_state = self.env_cfg.observations.get('append_stack_to_robot_state', False)
         self.normalize_pos = self.env_cfg.get('normalize_pos', False)
+        self.multi_goal = self.env_cfg.get('multi_goal', False)
+        self.less_crowded = self.env_cfg.get('less_crowded', False)
+        self.randomize_constraint_types = self.env_cfg.get('randomize_constraint_types', True)
 
         self.all_blocks_object_names = [self.env_cfg.block_bottom.block_name, self.env_cfg.block_top.block_name] + self.env_cfg.objects.names
 
@@ -59,9 +62,10 @@ class SlidePickupClutterMujocoMultimodalEnv(gym.Env, EzPickle):
         self.constraint_to_int_mapping = {
             'any_contact': 3,
             'soft_contact': 4,
-            'no_contact': 5
+            'no_contact': 5,
+            'no_over': 6,
         }
-        self.max_constraint_types = 6
+        self.max_constraint_types = 7
     
         if self.use_constraint_types:
             if self.constraint_type_repr == 'int':
@@ -70,6 +74,12 @@ class SlidePickupClutterMujocoMultimodalEnv(gym.Env, EzPickle):
                 self.low_dim_sizes = {'robot0': 6+self.max_constraint_types, 'objects': 6+self.max_constraint_types, 'semantics': self.max_constraint_types}
         else:
             self.low_dim_sizes = {'robot0': 6, 'objects': 6}
+
+        if self.multi_goal:
+            self.target_set_to_int_mapping = {t_name: t for t, t_name in enumerate(list(self.env_cfg.block_bottom.multi_goal_target_sets.keys()))}
+            self.low_dim_sizes['robot0'] += 1
+            self.low_dim_sizes['objects'] += 1
+            self.low_dim_sizes['semantics'] += 1
 
         self.low_dim_sizes['full_size'] = self.low_dim_sizes['robot0'] + (2+self.n_rel_objs)*self.low_dim_sizes['objects']
 
@@ -168,7 +178,7 @@ class SlidePickupClutterMujocoMultimodalEnv(gym.Env, EzPickle):
         # Visualization Parameters
         # self.visual_initial_states = self.sample_initial_state(self.env_cfg.get('num_eval_trajs', 20)) # samples n_all
         self.visual_initial_states = None
-        self.all_failure_modes = ['top_block_oob', 'collision_no_contact', 'collision_soft_contact', 'out_of_env', 'success']
+        self.all_failure_modes = ['top_block_oob', 'collision_no_contact', 'collision_soft_contact', 'collision_no_over', 'out_of_env', 'success']
     
     @property
     def tcp_center(self):
@@ -210,6 +220,7 @@ class SlidePickupClutterMujocoMultimodalEnv(gym.Env, EzPickle):
         return self.model.opt.timestep * self.frame_skip
     
     def set_observation_shapes(self):
+        # TODO(saumya): this function needs to be fixed so that observation shapes correspond to relevant objects not all objects in the env
         self.observation_shapes = {}
         if self.append_stack_to_robot_state:
             self.observation_shapes['robot_state'] = (self.low_dim_sizes['robot0']+2*self.low_dim_sizes['objects'],)
@@ -240,11 +251,30 @@ class SlidePickupClutterMujocoMultimodalEnv(gym.Env, EzPickle):
                     
     def update_constraint_types(self, const_types=None):
         if const_types is None: # Training: pred constraint types and GT constraint types are the same
-            self.pred_constraint_types = {obj_name: random.choice(self.env_cfg.constraint_types) for obj_name in self.env_cfg.objects.names}
+            if self.randomize_constraint_types:
+                self.pred_constraint_types = {obj_name: random.choice(self.env_cfg.constraint_types) for obj_name in self.env_cfg.objects.names}
+            else:
+                self.pred_constraint_types = copy.deepcopy(self.obj_to_constraint_map_gt)
             self.obj_to_constraint_map = copy.deepcopy(self.pred_constraint_types) # used for safety analysis
         else: # Eval: Use GT constraint types specified by user
             self.pred_constraint_types = const_types
             self.obj_to_constraint_map = copy.deepcopy(self.obj_to_constraint_map_gt) # used for safety analysis
+    
+    def update_goal(self, target_set=None):
+        if target_set is None:
+            if self.multi_goal:
+                self.target_set_name = random.choice(list(self.env_cfg.block_bottom.multi_goal_target_sets.keys()))
+                # self.target_set_name = 'target_set1'
+                self.sampled_target_set_low = np.array(self.env_cfg.block_bottom.multi_goal_target_sets[self.target_set_name].low)
+                self.sampled_target_set_high = np.array(self.env_cfg.block_bottom.multi_goal_target_sets[self.target_set_name].high)
+            else:
+                self.target_set_name = 'target_set'
+                self.sampled_target_set_low = np.array(self.env_cfg.block_bottom.target_set.low)
+                self.sampled_target_set_high = np.array(self.env_cfg.block_bottom.target_set.high)
+        else:
+            self.sampled_target_set_low = np.array(target_set.low)
+            self.sampled_target_set_high = np.array(target_set.high)
+
         
     def _get_site_pos(self, siteName):
         # _id = self.model.site_names.index(siteName)
@@ -384,20 +414,37 @@ class SlidePickupClutterMujocoMultimodalEnv(gym.Env, EzPickle):
             self.all_mujoco_objects[obj_name] = obj
         self.object_bottom_z = np.array(self.object_bottom_z)
 
-        # Add dummy object for goal visualization
-        goal_object = BoxObject(
-            name='goal0', 
-            size=(np.array(self.env_cfg.block_bottom.target_set.high)-np.array(self.env_cfg.block_bottom.target_set.low))/2,
-            rgba=[0, 1, 0, 0.2],
-            obj_type='visual',
-            joints=None,
-            duplicate_collision_geoms=False
-        )
-        goal_pos = (np.array(self.env_cfg.block_bottom.target_set.high)+np.array(self.env_cfg.block_bottom.target_set.low))/2
-        goal_object_body = goal_object.get_obj()
-        goal_object_body.set('pos', f'{goal_pos[0]} {goal_pos[1]} {goal_pos[2]}')
-        world.worldbody.append(goal_object_body)
-        world.merge_assets(goal_object)
+        if self.multi_goal:
+            # Add dummy object for goal visualization
+            for t_set_name, t_set_kwargs in self.env_cfg.block_bottom.multi_goal_target_sets.items():
+                goal_object = BoxObject(
+                    name=f'{t_set_name}', 
+                    size=(np.array(t_set_kwargs.high)-np.array(t_set_kwargs.low))/2,
+                    rgba=t_set_kwargs.rgba,
+                    obj_type='visual',
+                    joints=None,
+                    duplicate_collision_geoms=False
+                )
+                goal_pos = (np.array(t_set_kwargs.high)+np.array(t_set_kwargs.low))/2
+                goal_object_body = goal_object.get_obj()
+                goal_object_body.set('pos', f'{goal_pos[0]} {goal_pos[1]} {goal_pos[2]}')
+                world.worldbody.append(goal_object_body)
+                world.merge_assets(goal_object)
+        else:
+            # Add dummy object for goal visualization
+            goal_object = BoxObject(
+                name='goal0', 
+                size=(np.array(self.env_cfg.block_bottom.target_set.high)-np.array(self.env_cfg.block_bottom.target_set.low))/2,
+                rgba=[0, 1, 0, 0.2],
+                obj_type='visual',
+                joints=None,
+                duplicate_collision_geoms=False
+            )
+            goal_pos = (np.array(self.env_cfg.block_bottom.target_set.high)+np.array(self.env_cfg.block_bottom.target_set.low))/2
+            goal_object_body = goal_object.get_obj()
+            goal_object_body.set('pos', f'{goal_pos[0]} {goal_pos[1]} {goal_pos[2]}')
+            world.worldbody.append(goal_object_body)
+            world.merge_assets(goal_object)
 
         # world.root.find('compiler').set('inertiagrouprange', '0 5')
         # world.root.find('compiler').set('inertiafromgeom', 'auto')
@@ -459,11 +506,14 @@ class SlidePickupClutterMujocoMultimodalEnv(gym.Env, EzPickle):
         )
         object_samplers.append(block_top_sampler)
 
+        object_state_ranges_single_goal = self.env_cfg.objects.get('state_ranges_single_goal', self.env_cfg.objects.state_ranges)
+        object_state_ranges = self.env_cfg.objects.state_ranges if self.multi_goal else object_state_ranges_single_goal
+
         for obj_name in self.env_cfg.objects.names:
             object_samplers.append(UniformRandomSampler(
                 name=f"{obj_name}_sampler",
-                x_range=[self.env_cfg.objects.state_ranges.low[0], self.env_cfg.objects.state_ranges.high[0]],
-                y_range=[self.env_cfg.objects.state_ranges.low[1], self.env_cfg.objects.state_ranges.high[1]],
+                x_range=[object_state_ranges.low[0], object_state_ranges.high[0]],
+                y_range=[object_state_ranges.low[1], object_state_ranges.high[1]],
                 rotation=0,  # do not Randomize orientation
                 ensure_object_boundary_in_range=True,
                 ensure_valid_placement=True,
@@ -482,10 +532,14 @@ class SlidePickupClutterMujocoMultimodalEnv(gym.Env, EzPickle):
         block_bottom_pos = state[:2]
         block_bottom_low, block_bottom_high = self.get_object_bounds(self.env_cfg.block_bottom.block_name)
 
-        block_bottom_low[0] += 2*block_bottom_low[0]
-        block_bottom_low[1] += block_bottom_low[1]
-        block_bottom_high[1] += block_bottom_high[1]
-        
+        block_bottom_low[0] += 2*block_bottom_low[0] # space to slide forward
+        if self.less_crowded:
+            block_bottom_low[1] += block_bottom_low[1] # space to slide sideways
+            block_bottom_high[1] += block_bottom_high[1] # space to slide sideways
+        else:
+            block_bottom_low[1] += block_bottom_low[1]/2 # space to slide sideways
+            block_bottom_high[1] += block_bottom_high[1]/2 # space to slide sideways
+
         gx = -1e6
         for i, obj_name in enumerate(self.env_cfg.objects.names):
             obj_pos = state[12+i*6:12+i*6+2]
@@ -509,21 +563,21 @@ class SlidePickupClutterMujocoMultimodalEnv(gym.Env, EzPickle):
         if self.env_cfg.randomize_locations:
             for idx in range(N):
                 succ = False
-                # obj_in_goal = False
                 while not succ:
+                    obj_in_goal = False
                     sample = self.composite_sampler.sample()
                     for i, obj_name in enumerate(self.all_blocks_object_names):
                         states[idx, i*6:i*6+3] = np.array(sample[obj_name][0])
-                        # if self.env_cfg.block_bottom.target_set_type == 'absolute':
-                        #     _obj_state = np.concatenate([self.ee_pos.copy(), np.zeros(3), sample[obj_name][0]]).reshape(1,-1) # append ee state
-                        #     obj_in_goal = self.check_success(_obj_state)[0][0] or obj_in_goal
+                        if self.env_cfg.block_bottom.target_set_type == 'absolute':
+                            _obj_state = np.concatenate([self.ee_pos.copy(), np.zeros(3), sample[obj_name][0]]).reshape(1,-1) # append ee state
+                            obj_in_goal = self.check_success(_obj_state)[0][0] or obj_in_goal
                     full_state = np.concatenate([self.ee_pos.copy(), np.zeros(3), states[idx]]).reshape(1,-1) # append ee state
                     fail, _ = self.check_failure(full_state)
                     
                     if self.env_cfg.get('reset_uncrowded', True):
                         crowded = self.check_bottom_block_crowding(states[idx])
-                        # succ = False if (fail[0] or crowded or obj_in_goal) else True
-                        succ = False if (fail[0] or crowded) else True
+                        succ = False if (fail[0] or crowded or obj_in_goal) else True
+                        # succ = False if (fail[0] or crowded) else True
                     else:
                         succ = False if fail[0] else True
         else:
@@ -595,9 +649,11 @@ class SlidePickupClutterMujocoMultimodalEnv(gym.Env, EzPickle):
         self.update_relevant_objs()
         if self.use_constraint_types:
             self.update_constraint_types()
+        
+        self.update_goal()
 
         self.safety_set_top_low, self.safety_set_top_high = None, None
-        # self.target_set_low, self.target_set_high = None, None
+        self.target_set_low, self.target_set_high = None, None
         if start is None:
             sample_state = self.sample_initial_state(1)[0]
         else:
@@ -621,11 +677,11 @@ class SlidePickupClutterMujocoMultimodalEnv(gym.Env, EzPickle):
 
         if self.env_cfg.block_bottom.target_set_type == 'relative':
             block_bot_pos = self._get_body_pos(self.env_cfg.block_bottom.block_name)
-            self.target_set_low = block_bot_pos + self.env_cfg.block_bottom.target_set.low
-            self.target_set_high = block_bot_pos + self.env_cfg.block_bottom.target_set.high
+            self.target_set_low = block_bot_pos + self.sampled_target_set_low
+            self.target_set_high = block_bot_pos + self.sampled_target_set_high
         elif self.env_cfg.block_bottom.target_set_type == 'absolute':
-            self.target_set_low = self.env_cfg.block_bottom.target_set.low
-            self.target_set_high = self.env_cfg.block_bottom.target_set.high
+            self.target_set_low = self.sampled_target_set_low
+            self.target_set_high = self.sampled_target_set_high
         else:
             raise NotImplementedError('Target set type not implemented.')
 
@@ -772,6 +828,11 @@ class SlidePickupClutterMujocoMultimodalEnv(gym.Env, EzPickle):
         mask[:3,:3] = 1 # ee, block bottom and top attend to one another
         mask[-self.N_dist_objects:,-self.N_dist_objects:] = np.eye(self.N_dist_objects) #np.eye(self.N_dist_objects) # objects attend to themselves
         mask[sorted_indices, :3] = 1
+
+        any_contact_indices = [3+i for i, name in enumerate(self.rel_obj_names) if self.pred_constraint_types[name] == 'any_contact']
+        mask[:3, any_contact_indices] = 0
+        mask[any_contact_indices, :3] = 0
+
         return mask
     
     def get_current_relevant_state(self):
@@ -792,12 +853,16 @@ class SlidePickupClutterMujocoMultimodalEnv(gym.Env, EzPickle):
         else:
             ee_state = np.concatenate([self.ee_pos, ee_vel_t])
 
+        semantics = [const_type_rep]
+
+        if self.multi_goal:
+            ee_state = np.append(ee_state, self.target_set_to_int_mapping[self.target_set_name])
+            semantics = [np.append(const_type_rep, self.target_set_to_int_mapping[self.target_set_name])]
+
         if self.normalize_pos:
             ee_state[:3] = self.get_normalized_pos(ee_state[:3])
 
         obs['robot_state'] = ee_state
-
-        semantics = [const_type_rep]
 
         if 'objects_state' in self.observations['low_dim']:
             xt_stack, semantics_stack = [], []
@@ -820,6 +885,10 @@ class SlidePickupClutterMujocoMultimodalEnv(gym.Env, EzPickle):
                         self._get_body_pos(body_name), 
                         self._get_body_vel(body_name)]
                     )
+
+                if self.multi_goal:
+                    body_state = np.append(body_state, self.target_set_to_int_mapping[self.target_set_name])
+                    const_type_rep = np.append(const_type_rep, self.target_set_to_int_mapping[self.target_set_name])
                 
                 if self.normalize_pos:
                     body_state[:3] = self.get_normalized_pos(body_state[:3])
@@ -835,7 +904,7 @@ class SlidePickupClutterMujocoMultimodalEnv(gym.Env, EzPickle):
                     elif self.constraint_type_repr == 'one_hot':
                         const_type_rep = np.zeros(self.max_constraint_types)
                         const_type_rep[self.constraint_to_int_mapping[self.pred_constraint_types[body_name]]] = 1
-                    semantics_dist.append(const_type_rep)
+                    
 
                     body_state = np.concatenate([
                         self._get_body_pos(body_name), 
@@ -845,10 +914,15 @@ class SlidePickupClutterMujocoMultimodalEnv(gym.Env, EzPickle):
                 else:
                     body_state = np.append(self._get_body_pos(body_name), self._get_body_vel(body_name))
                 
+                if self.multi_goal:
+                    body_state = np.append(body_state, self.target_set_to_int_mapping[self.target_set_name])
+                    const_type_rep = np.append(const_type_rep, self.target_set_to_int_mapping[self.target_set_name])
+
                 if self.normalize_pos:
                     body_state[:3] = self.get_normalized_pos(body_state[:3])
 
                 xt_dist.append(body_state)
+                semantics_dist.append(const_type_rep)
 
             if self.append_stack_to_robot_state:
                 obs['robot_state'] = np.concatenate([ee_state, *xt_stack])
@@ -965,9 +1039,9 @@ class SlidePickupClutterMujocoMultimodalEnv(gym.Env, EzPickle):
     def get_action(self):
         action = np.zeros(3)
         if self.suction_gripper_active:
-            action[:3] = [-0.4, 0, 0.001]
-            # target_pos = [0., 0.3, 0.1]
-            # action[:3] = target_pos - self.ee_pos
+            # action[:3] = [-0.4, 0, 0.001]
+            target_pos = (self.target_set_high + self.target_set_low)/2 # [0., 0.3, 0.1]
+            action[:3] = target_pos - self.ee_pos[:3]
         else:
             target_pos = self.get_suction_target()
             action[:3] = target_pos - self.ee_pos
@@ -1031,6 +1105,11 @@ class SlidePickupClutterMujocoMultimodalEnv(gym.Env, EzPickle):
             obstacle = velocity_const*(obstacle>0) + -1e6*np.ones(obstacle.shape)*(obstacle<0)
             if obstacle[0]>0 and self.failure_mode is None:
                 self.failure_mode = 'collision_soft_contact'
+                self.colliding_obj_name = obj2_name
+        elif 'no_over' in self.obj_to_constraint_map[obj2_name]:
+            xy_dist =  np.linalg.norm(obj1_pos[...,:2]-obj2_pos[...,:2], axis=-1) - self.env_cfg.thresh
+            if (obstacle[0]>0 or xy_dist[0]<0) and self.failure_mode is None:
+                self.failure_mode = 'collision_no_over'
                 self.colliding_obj_name = obj2_name
         else:
             raise NotImplementedError('Contraint type not implemented!')
@@ -1123,16 +1202,16 @@ class SlidePickupClutterMujocoMultimodalEnv(gym.Env, EzPickle):
 
         if target_set_low is None:
             if self.env_cfg.block_bottom.target_set_type == 'relative':
-                target_set_low = _bottom_block_pos + self.env_cfg.block_bottom.target_set.low
+                target_set_low = _bottom_block_pos + self.sampled_target_set_low
             elif self.env_cfg.block_bottom.target_set_type == 'absolute':
-                target_set_low = self.env_cfg.block_bottom.target_set.low
+                target_set_low = self.sampled_target_set_low
             else:
                 raise NotImplementedError('Target set type not implemented.')
         if target_set_high is None:
             if self.env_cfg.block_bottom.target_set_type == 'relative':
-                target_set_high = _bottom_block_pos + self.env_cfg.block_bottom.target_set.high
+                target_set_high = _bottom_block_pos + self.sampled_target_set_high
             elif self.env_cfg.block_bottom.target_set_type == 'absolute':
-                target_set_high = self.env_cfg.block_bottom.target_set.high
+                target_set_high = self.sampled_target_set_high
             else:
                 raise NotImplementedError('Target set type not implemented.')
 
@@ -1194,6 +1273,13 @@ class SlidePickupClutterMujocoMultimodalEnv(gym.Env, EzPickle):
 
         toppled = shortest_angle > self.env_cfg.get('toppl_thresh', 15)
         return toppled
+    
+    def is_over(self, obj1_name, obj2_name):
+        obj1_pos = self._get_body_pos(obj1_name)
+        obj2_pos = self._get_body_pos(obj2_name)
+
+        xy_dist =  np.linalg.norm(obj1_pos[:2]-obj2_pos[:2]) - self.env_cfg.thresh
+        return xy_dist<0
 
     def check_real_failure(self):
 
@@ -1221,6 +1307,11 @@ class SlidePickupClutterMujocoMultimodalEnv(gym.Env, EzPickle):
                 elif 'soft_contact' in self.obj_to_constraint_map[obj_name]:
                     if in_collision and self.is_toppled(obj_name):
                         self.failure_mode = 'collision_soft_contact'
+                        self.colliding_obj_name = obj_name
+                        return True
+                elif 'no_over' in self.obj_to_constraint_map[obj_name]:
+                    if in_collision or self.is_over(self.env_cfg.block_bottom.block_name, obj_name):
+                        self.failure_mode = 'collision_no_over'
                         self.colliding_obj_name = obj_name
                         return True
                 else:
@@ -1512,8 +1603,9 @@ if __name__ == "__main__":
             img = env.renderer.render()
             
             ep_len += 1
+            import ipdb; ipdb.set_trace()
         print(f'ep_len: {ep_len}')
         if save_gif:
-            file_name = f'test_slide_pickup_clutter_NormState_{i}_{env.failure_mode}_{env.colliding_obj_name}'
+            file_name = f'test_slide_pickup_{i}_goal_{env.target_set_name}_{env.failure_mode}_{env.colliding_obj_name}'
             imageio.mimsave(out_folder+f'{file_name}.gif', imgs[::4], duration=100)
             env.plot_trajectory(xt_all, np.stack(at_all,axis=0), os.path.join(out_folder, f'{file_name}.png'))
