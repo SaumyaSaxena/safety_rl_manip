@@ -14,6 +14,7 @@ import mujoco
 from mujoco import viewer
 
 from robosuite.models.objects.primitive.box import BoxObject
+from robosuite.models.objects import MujocoXMLObject
 from robosuite.models.objects.utils import get_obj_from_name
 
 from safety_rl_manip.envs.utils import create_grid, draw_bounding_boxes_cv2, get_bounding_boxes, signed_dist_fn_rectangle, plot_colored_segmentation
@@ -35,6 +36,7 @@ class SlidePickupClutterMujocoMultimodalEnv(gym.Env, EzPickle):
         EzPickle.__init__(self)
         self.device = device
         self.env_cfg = cfg
+        
         self.n_rel_objs = self.env_cfg.n_rel_objs
         self.frame_skip = self.env_cfg.frame_skip
         self._did_see_sim_exception = False
@@ -356,17 +358,18 @@ class SlidePickupClutterMujocoMultimodalEnv(gym.Env, EzPickle):
         # Bottom block
         if 'block' in self.env_cfg.block_bottom.block_name:
             block_bottom = BoxObject(name='block_bottom', size=self.env_cfg.block_bottom.size, rgba=self.env_cfg.block_bottom.rgba)
+            self.bottom_hor_rad = np.array(block_bottom.size)
         else:
             block_bottom = get_obj_from_name(self.env_cfg.block_bottom.block_name)
+            hor_site = block_bottom.worldbody.find(f"./body/site[@name='{self.env_cfg.block_bottom.block_name}_horizontal_radius_site']")
+            self.bottom_hor_rad = string_to_array(hor_site.get("pos"))
         block_bottom_body = block_bottom.get_obj()
         self.block_bottom_z = -block_bottom.bottom_offset[2]
         block_bottom_body.set('pos', f'{self.env_cfg.block_bottom.initial_pos[0]} {self.env_cfg.block_bottom.initial_pos[1]} {self.block_bottom_z}')
         world.worldbody.append(block_bottom_body)
         world.merge_assets(block_bottom)
         self.all_mujoco_objects[self.env_cfg.block_bottom.block_name] = block_bottom
-        hor_site = block_bottom.worldbody.find(f"./body/site[@name='{self.env_cfg.block_bottom.block_name}_horizontal_radius_site']")
-        self.bottom_hor_rad = string_to_array(hor_site.get("pos"))
-
+        
         if 'lego' in self.env_cfg.block_bottom.block_name:
             rot_z = Rotation.from_euler('z', -90, degrees=True)  # 90 degrees about Z-axis
             rot_x = Rotation.from_euler('x', -90, degrees=True)  # 90 degrees about X-axis
@@ -969,6 +972,7 @@ class SlidePickupClutterMujocoMultimodalEnv(gym.Env, EzPickle):
 
             g1 = mujoco.mj_id2name(self.model, mujoco.mjtObj.mjOBJ_GEOM, contact.geom1)
             g2 = mujoco.mj_id2name(self.model, mujoco.mjtObj.mjOBJ_GEOM, contact.geom2)
+            # print(f'{g1=}  {g2=}')
 
             if (g1 is None) or (g2 is None):
                 continue
@@ -1050,18 +1054,25 @@ class SlidePickupClutterMujocoMultimodalEnv(gym.Env, EzPickle):
         return action
 
     def get_object_bounds(self, obj_name):
-        hor_site = self.all_mujoco_objects[obj_name].worldbody.find(f"./body/site[@name='{obj_name}_horizontal_radius_site']")
-        obj_hor_rad = string_to_array(hor_site.get("pos"))
-        obj_hor_rad[2] = 0
+        if isinstance(self.all_mujoco_objects[obj_name], BoxObject):
+            obj_hor_rad = self.all_mujoco_objects[obj_name].size
+            obj_low = -1*np.array(obj_hor_rad)
+            obj_high = 1*np.array(obj_hor_rad)
+        elif isinstance(self.all_mujoco_objects[obj_name], MujocoXMLObject):
+            hor_site = self.all_mujoco_objects[obj_name].worldbody.find(f"./body/site[@name='{obj_name}_horizontal_radius_site']")
+            obj_hor_rad = string_to_array(hor_site.get("pos"))
+            obj_hor_rad[2] = 0
 
-        obj_low = -1*obj_hor_rad
-        obj_high = 1*obj_hor_rad
+            obj_low = -1*obj_hor_rad
+            obj_high = 1*obj_hor_rad
 
-        bottom_site = self.all_mujoco_objects[obj_name].worldbody.find(f"./body/site[@name='{obj_name}_bottom_site']")
-        obj_low[2] = string_to_array(bottom_site.get("pos"))[2]
+            bottom_site = self.all_mujoco_objects[obj_name].worldbody.find(f"./body/site[@name='{obj_name}_bottom_site']")
+            obj_low[2] = string_to_array(bottom_site.get("pos"))[2]
 
-        top_site = self.all_mujoco_objects[obj_name].worldbody.find(f"./body/site[@name='{obj_name}_top_site']")
-        obj_high[2] = string_to_array(top_site.get("pos"))[2]
+            top_site = self.all_mujoco_objects[obj_name].worldbody.find(f"./body/site[@name='{obj_name}_top_site']")
+            obj_high[2] = string_to_array(top_site.get("pos"))[2]
+        else:
+            raise NotImplementedError('Object type not implemented!')
 
         return obj_low, obj_high
         
@@ -1266,7 +1277,7 @@ class SlidePickupClutterMujocoMultimodalEnv(gym.Env, EzPickle):
         xyz = Rotation.from_quat(quat_body, scalar_first=True).as_euler('xyz', degrees=True)
         del_z = np.abs(xyz[2])
         shortest_angle = np.minimum(del_z, 180-del_z)
-        print(shortest_angle)
+        # print(shortest_angle)
 
         # obj_pos = self._get_body_pos(obj_name)
         # toppled = np.abs(self.init_obj_pos[obj_name][2]-obj_pos[2]) > self.env_cfg.toppl_thresh
@@ -1568,11 +1579,12 @@ if __name__ == "__main__":
     env_cfg = OmegaConf.load('/home/saumyas/Projects/safe_control/safety_rl_manip/cfg/envs/mujoco_envs.yaml')
 
     env_name = "slide_pickup_clutter_mujoco_multimodal_env-v0"
+    # env_name = "realW_slide_pickup_clutter_mujoco_multimodal_env-v0"
     env = gym.make(env_name, device=0, cfg=env_cfg[env_name])
 
     save_gif = True
     num_episodes = 10
-    max_ep_len = 200
+    max_ep_len = 400
     down_action = np.array([0.0,0,-0.3,0])
     up_action = np.array([0.3,0,0.3,0])
 
@@ -1603,9 +1615,9 @@ if __name__ == "__main__":
             img = env.renderer.render()
             
             ep_len += 1
-            import ipdb; ipdb.set_trace()
+            # import ipdb; ipdb.set_trace()
         print(f'ep_len: {ep_len}')
         if save_gif:
-            file_name = f'test_slide_pickup_{i}_goal_{env.target_set_name}_{env.failure_mode}_{env.colliding_obj_name}'
+            file_name = f'test_slide_pickup_6objsThe_{i}_goal_{env.target_set_name}_{env.failure_mode}_{env.colliding_obj_name}'
             imageio.mimsave(out_folder+f'{file_name}.gif', imgs[::4], duration=100)
             env.plot_trajectory(xt_all, np.stack(at_all,axis=0), os.path.join(out_folder, f'{file_name}.png'))

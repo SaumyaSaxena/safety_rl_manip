@@ -1,11 +1,11 @@
 debug: False
-gpu: 1
+gpu: 2
 seed: 20
 tag: ${now:%Y-%m-%d-%H-%M-%S}
 run_name: "trainSS_DDPG_SA_indep_${train_cfg.mode}" 
 # variant: ${train_cfg.warmup_cfg.warmup_type}_UpdatePiType_${train_cfg.warmup_cfg.warmupQ_expert.update_pi_type}
 # variant: 'no_terminal_gammaSch150_lrSch'
-variant: 'real_Mask3_MultiConst_MultiGoal_Clip5_2attn_mean_lr1e4_scaleRew1000_NoStack_64_noDropout_int'
+variant: 'REAL_Warmstart_Mask3_SingleConst_MultiGoal_Clip5_2attn_mean_lr1e4_scaleRew1000_NoStack_64_noDropout_int'
 # variant: '6obj_Clip5_2attn_mean_lr1e4_scaleRew1000_NoStack_64_noDropout_int'
 
 hydra:
@@ -25,9 +25,9 @@ wandb:
   name: ${run_name}_${variant}
 wandb_resume_id: null
 
-env_name: "slide_pickup_clutter_mujoco_multimodal_env-v0"
+env_name: "realW_slide_pickup_clutter_mujoco_multimodal_env-v0"
 envs:
-  slide_pickup_clutter_mujoco_multimodal_env-v0:
+  realW_slide_pickup_clutter_mujoco_multimodal_env-v0:
     doneType: 'all'
     return_type: 'reward'
     mode: ${train_cfg.mode}
@@ -46,7 +46,7 @@ envs:
     tok_k_mask: 3
     objects:
       names: ['porcelain_mug', 'blue_mug', 'red_mug', 'toy_sheep', 'supplement0', 'supplement2'] # 'porcelain_mug', 'blue_mug', 'red_mug', 'toy_sheep', 'supplement0', 'supplement2'
-    constraint_types: ['no_contact', 'soft_contact', 'any_contact', 'no_over'] # , 'soft_contact', 'any_contact', 'no_over'; used when randomize_constraint_types=True
+    constraint_types: ['no_contact'] # , 'soft_contact', 'any_contact', 'no_over'; used when randomize_constraint_types=True
     randomize_constraint_types: True
     obj_to_constraint_map: # used when randomize_constraint_types=False
       porcelain_mug: 'no_contact'
@@ -231,10 +231,10 @@ train_cfg:
     MLPActorCritic:
       hidden_sizes: [256,256]
       activation: 'relu'
-  resume_from_ckpt: False
+  resume_from_ckpt: True
   wandb_load:
-    run_path: iam-lab/safety_rl_manip/31edd9u7 # 6objs, RA
-    file: model/step_135999_test_return_-566.38_succRate_0.26.pth
+    run_path: iam-lab/safety_rl_manip/2evhjbes # 6objs, RA, RandomMultiConst, MultiGoal
+    file: model/step_591999_test_return_-8351.36_succRate_0.76.pth
 
 eval_cfg:
   seed: ${seed}

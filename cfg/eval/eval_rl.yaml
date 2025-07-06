@@ -1,57 +1,103 @@
 tag: ${now:%Y-%m-%d-%H-%M-%S}
 debug: True # TODO: always true since we are not using wandb during eval
-prefix: '12obj_LessCrowding'
+prefix: 'Train_moreCrowded'
 seeds: [20, 0, 45]
 
 eval_cfg:
   gpu: 1
-  seed: 20
+  seed: 0
   wandb_load:
     project: safety_rl_manip
     # run_path: iam-lab/safety_rl_manip/8oc8cvgn # 6obj with mask
+    # file: model/step_4743999_test_return_-9699.91_succRate_0.95.pth
+    # run_path: iam-lab/safety_rl_manip/ix4s2zfn # 6obj without mask
+    # file: model/step_4655999_test_return_-9804.40_succRate_0.88.pth
+    # run_path: iam-lab/safety_rl_manip/orxs1gfs # All constraint types sampled, masking, multigoal
+    # file: model/step_1623999_test_return_-8801.52_succRate_0.81.pth
+    # run_path: iam-lab/safety_rl_manip/3x4qr9p0  # Preset All constraint types, masking, multigoal
+    # file: model/step_1063999_test_return_-9215.89_succRate_0.78.pth
+    # run_path: iam-lab/safety_rl_manip/0vw20kdm  # MLP 2 layers 6 objects, no collision constraints
     # file: model/step_1615999_test_return_-9.64_succRate_0.85.pth
-    run_path: iam-lab/safety_rl_manip/ix4s2zfn # 6obj without mask
-    file: model/step_1615999_test_return_-9.64_succRate_0.85.pth
+    # run_path: iam-lab/safety_rl_manip/jfdy48tj  # MLP 2 layers 6 objects, All constraint types, multigoal
+    # file: model/step_1615999_test_return_-9.64_succRate_0.85.pth
+    # run_path: iam-lab/safety_rl_manip/z3l97b7x  # MLP 4 layers 6 objects, no collision constraints
+    # file: model/step_1615999_test_return_-9.64_succRate_0.85.pth
+    # run_path: iam-lab/safety_rl_manip/z4keypip  # MLP 4 layers 6 objects, All constraint types, multigoal
+    # file: model/step_1615999_test_return_-9.64_succRate_0.85.pth
+    # run_path: iam-lab/safety_rl_manip/5hoig14t # No Mask, All constraint types sampled, multiGoal
+    # run_path: iam-lab/safety_rl_manip/2evhjbes # Mask3, SingleConst, multiGoal
+    # file: model/step_591999_test_return_-8351.36_succRate_0.76.pth # Mask3, SingleConst, multiGoal
+    # run_path: iam-lab/safety_rl_manip/asfhk5r2 # Mask3, MultiConst, multiGoal, crowded training
+    # file: model/step_4135999_test_return_-9411.04_succRate_0.59.pth # Mask3, MultiConst, multiGoal, crowded training
+    run_path: iam-lab/safety_rl_manip/sd2tfjmo # Mask3, MultiConst, multiGoal, crowded training, Warmstart
+    # run_path: iam-lab/safety_rl_manip/1iun6et2 # Mask3, SingleConst, multiGoal, crowded training
+    # run_path: iam-lab/safety_rl_manip/888zo98b # Mask3, SingleConst, multiGoal, crowded training, Warmstart
   eval_value_fn: False
   eval_safe_rollouts: True
   save_rollout_gifs: True
-  num_visualization_rollouts: 10
-  num_eval_episodes: 100
-  top_k: 1
+  num_visualization_rollouts: 2
+  num_eval_episodes: 200
+  top_k: 3
 
 # remove below if using the same env as during training
 env_cfg:
-  n_rel_objs: 12
+  less_crowded: False
   doneType: 'real'
-  less_crowded: True
-  # block_bottom:
-  #   state_ranges: # x, y
-  #     low: [0.4, 0.45] # [0.0, 0.45]
-  #     high: [0.5, 0.75] # [0.5, 0.75]
-  objects:
-    names: ['porcelain_mug', 'blue_mug', 'red_mug', 'supplement0', 'supplement2', 'toy_sheep',  'can', 'blue_mug1', 'red_mug1', 'porcelain_mug1', 'toy_sheep1', 'plant_pot1'] # , 'toy_elephant_small', 'can',  'blue_mug1', 'red_mug1', 'porcelain_mug1', 'toy_sheep1', 'plant_pot1'
-    initial_poses: 
-      - [0.5, 0.4]
-      - [-0.2, 0.85]
-      - [-0.4, 0.4]
-      - [0.5, 0.8]
-      - [0.0, 0.8]
-      - [0.2, 0.8]
-      - [0.2, 0.8]
-      - [0.2, 0.8]
-      - [0.2, 0.8]
-      - [0.2, 0.8]
-      - [0.2, 0.8]
-      - [0.2, 0.8]
-      - [0.2, 0.8]
-      - [0.2, 0.8]
-      - [0.2, 0.8]
-      - [0.2, 0.8]
-      - [0.2, 0.8]
-      - [0.2, 0.8]
-      - [0.2, 0.8]
-      - [0.2, 0.8]
-
+  reset_uncrowded: False
+  img_size: [256, 256]
+#   n_rel_objs: 15
+#   # constraint_types: ['no_contact']
+#   objects:
+#     names: ['porcelain_mug', 'blue_mug', 'red_mug', 'toy_elephant_small', 'toy_sheep', 'plant_pot', 'supplement0', 'supplement2', 'toy_android', 'toy_android1', 'porcelain_mug1', 'plant_pot1', 'toy_sheep1', 'toy_elephant_small2', 'toy_sheep2'] # , 'toy_elephant_small', 'can',  'blue_mug1', 'red_mug1', 'porcelain_mug1', 'toy_sheep1', 'plant_pot1'
+#     initial_poses: 
+#       - [0.5, 0.4]
+#       - [-0.2, 0.85]
+#       - [-0.4, 0.4]
+#       - [0.5, 0.8]
+#       - [0.0, 0.8]
+#       - [0.2, 0.8]
+#       - [0.2, 0.8]
+#       - [0.2, 0.8]
+#       - [0.2, 0.8]
+#       - [0.2, 0.8]
+#       - [0.2, 0.8]
+#       - [0.2, 0.8]
+#       - [0.2, 0.8]
+#       - [0.2, 0.8]
+#       - [0.2, 0.8]
+#       - [0.2, 0.8]
+#       - [0.2, 0.8]
+#       - [0.2, 0.8]
+#       - [0.2, 0.8]
+#       - [0.2, 0.8]
+#     state_ranges: # x, y
+#       low: [-0.7, 0.2]
+#       high: [0.7, 0.99]
+#     state_ranges_single_goal: # x, y
+#       low: [-0.4, 0.2]
+#       high: [0.7, 0.99]
+#   randomize_constraint_types: False # 'no_contact', 'soft_contact', 'any_contact', 'no_over'
+#   obj_to_constraint_map: # when use_constraint_types=True, not used during training if randomize_constraint_types=True
+#     porcelain_mug: 'no_contact'
+#     blue_mug: 'no_contact'
+#     red_mug: 'no_contact'
+#     supplement0: 'soft_contact'
+#     supplement2: 'soft_contact'
+#     toy_sheep: 'any_contact'
+#     toy_sheep2: 'any_contact'
+#     toy_sheep1: 'any_contact'
+#     toy_elephant_small: 'any_contact'
+#     toy_elephant_small1: 'any_contact'
+#     toy_elephant_small2: 'any_contact'
+#     toy_android: 'any_contact'
+#     toy_android1: 'any_contact'
+#     can: 'any_contact'
+#     blue_mug1: 'no_contact'
+#     red_mug1: 'no_contact'
+#     porcelain_mug1: 'no_contact'
+#     plant_pot: 'no_over'
+#     plant_pot1: 'no_over'
+    
 # env_cfg:
 #   thresh: 0.005 # 0.01
 #   objects:

@@ -11,7 +11,7 @@ client = OpenAI()
 
 response = client.images.generate(
   model="dall-e-2",
-  prompt="2D occupancy map.",
+  prompt="A household robot taking care for the elderly. Make it look realistic.",
   n=1,
   size="256x256"
 )
@@ -28,6 +28,6 @@ print(image_url)
 
 data = requests.get(image_url).content 
 
-f = open("/home/saumyas/Projects/safe_control/safety_rl_manip/outputs/media/sg.png",'wb') 
+f = open("/home/saumyas/Projects/safe_control/safety_rl_manip/outputs/media/hosp.png",'wb') 
 f.write(data) 
 f.close()

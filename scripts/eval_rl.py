@@ -32,6 +32,7 @@ def main():
     eval_path = Path('outputs/evals')
     model_path = os.path.join(eval_path, 'ckpts')
     run_id = eval_cfg.wandb_load.run_path.split('/')[-1]
+    succ_rate = float(eval_cfg.wandb_load.file[-8:-4])
 
     # Load checkpoint
     ckpt_file = wandb.restore(
@@ -53,7 +54,7 @@ def main():
         OmegaConf.set_struct(env_cfg, True)
 
     if 'run_variant' in ckpt['train_cfg']:
-        time_str = time_str + f'_seed{eval_cfg.seed}' + f'_{run_id}' + f'_{cfg.prefix}_' + ckpt['train_cfg']['run_variant'] + '_' + 'evals'
+        time_str = time_str + f'_seed{eval_cfg.seed}' + f'_{run_id}' + f'_{cfg.prefix}_' + ckpt['train_cfg']['run_variant'] + '_' + f'ckpt_succ_rate_{succ_rate*100:.0f}'
 
     eval_path = os.path.join(eval_path, f'{env_name}_{algo_name}_{mode}', time_str)
 

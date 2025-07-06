@@ -29,7 +29,8 @@ logger = logging.getLogger(__name__)
 # @hydra.main(config_path='../cfg/', config_name='train_pickup_slide_panda_mujoco_ddpg_indep_adaln_mulitmodal_low_dim.yaml')
 # @hydra.main(config_path='../cfg/', config_name='train_pickup_slide_panda_mujoco_ddpg_indep_adaln_mulitmodal_low_dim.yaml')
 
-@hydra.main(config_path='../cfg/', config_name='train_pickup_slide_ddpg_IndepAttn_basic_low_dim.yaml')
+# @hydra.main(config_path='../cfg/', config_name='train_pickup_slide_ddpg_IndepAttn_basic_low_dim.yaml')
+@hydra.main(config_path='../cfg/', config_name='train_pickup_slide_ddpg_IndepAttn_basic_low_dim_real.yaml')
 # @hydra.main(config_path='../cfg/', config_name='train_pickup_slide_ddpg_MLP_basic_low_dim.yaml')
 
 # @hydra.main(config_path='../cfg/', config_name='train_pickup_slide_SAC_IndepAttn_basic_low_dim.yaml')

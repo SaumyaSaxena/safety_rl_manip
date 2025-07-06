@@ -227,11 +227,15 @@ class DDPGMultimodalIndep(torch.nn.Module):
             pred_v =  outputs['q_policy'].detach().cpu().numpy() if 'q_policy' in outputs else outputs['q1_policy'].detach().cpu().numpy()
             pred_success = pred_v > 0.
             
+            start = time.time()
+            ep_time = 0
             gt_success = False
             while not(d or (self.test_env.current_timestep == self.max_ep_len)):
                 # at = outputs['action'].detach().cpu().numpy()
                 o, r, d, _ = self.test_env.step(self.get_action(o, 0))
                 ep_ret += r
+            # print(f"Episode total time: {(time.time() - start)}")
+            # print(f"Episode time per step: {(time.time() - start)/self.test_env.current_timestep}")
             avg_return += ep_ret
             avg_ep_len += self.test_env.current_timestep
             num_pred_success += pred_success
@@ -460,7 +464,7 @@ class DDPGMultimodalIndep(torch.nn.Module):
                 
                 at_all.append(at[0])
                 rollout.append(o)
-                attn_weights_all.append([aw.detach().cpu().numpy() for aw in self.ac.pi_attention_weights])
+                # attn_weights_all.append([aw.detach().cpu().numpy() for aw in self.ac.pi_attention_weights])
                 if save_rollout_gifs:
                     self.test_env.renderer.update_scene(self.test_env.data, camera=self.test_env.front_cam_name) 
                     img = self.test_env.renderer.render()

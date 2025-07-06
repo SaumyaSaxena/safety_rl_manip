@@ -47,6 +47,8 @@ def main():
     topk_succ_rates = [succ_rates[i] for i in topk_idx]
 
     for i, ckpt_filename in enumerate(topk_files):
+        # if not i==1:
+        #     continue
         print("Evaluating checkpoint: ", ckpt_filename)
 
         time_str = time.strftime("%Y_%m_%d_%H_%M_%S")
